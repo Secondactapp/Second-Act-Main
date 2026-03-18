@@ -1,4 +1,4 @@
-export default async function handler(req, res) {
+module.exports = async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
@@ -18,4 +18,11 @@ export default async function handler(req, res) {
     console.error("API error:", err);
     return res.status(500).json({ error: "API call failed" });
   }
-}
+};
+```
+
+The only difference is the first line — `module.exports =` instead of `export default`. Save the file, then in Terminal:
+```
+git add .
+git commit -m "Fix API export"
+git push
