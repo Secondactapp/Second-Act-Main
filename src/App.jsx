@@ -3719,7 +3719,7 @@ Respond with ONLY valid JSON, no preamble, no markdown fences:
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "claude-sonnet-4-20250514",
+        model: "claude-sonnet-4-5",
         max_tokens: 4096,
         messages: [{ role: "user", content: prompt }],
       }),
@@ -3827,7 +3827,7 @@ Return ONLY valid JSON:
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "claude-sonnet-4-20250514",
+        model: "claude-sonnet-4-5",
         max_tokens: 1000,
         messages: [{ role: "user", content: prompt }],
       }),
@@ -4024,7 +4024,7 @@ Return ONLY valid JSON, no markdown:
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "claude-sonnet-4-20250514",
+        model: "claude-sonnet-4-5",
         max_tokens: 3000,
         messages: [{ role: "user", content: prompt }],
       }),
@@ -4123,7 +4123,7 @@ Return ONLY valid JSON, no markdown:
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "claude-sonnet-4-20250514",
+        model: "claude-sonnet-4-5",
         max_tokens: 3500,
         messages: [{ role: "user", content: prompt }],
       }),
@@ -4247,7 +4247,7 @@ Return ONLY valid JSON, no markdown:
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "claude-sonnet-4-20250514",
+        model: "claude-sonnet-4-5",
         max_tokens: 1200,
         messages: [{ role: "user", content: prompt }],
       }),
@@ -4665,7 +4665,7 @@ Return ONLY the statement, nothing else.`;
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "claude-sonnet-4-20250514",
+        model: "claude-sonnet-4-5",
         max_tokens: 60,
         messages: [{ role: "user", content: prompt }],
       }),
