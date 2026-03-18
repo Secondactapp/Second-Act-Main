@@ -3823,7 +3823,7 @@ Return ONLY valid JSON:
 {"w1":"...","w2":"...","w3":"...","w4":"...","w5":"...","w6":"...","w7":"...","w8":"...","a1":"...","a2":"...","a3":"..."}`;
 
   try {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
+    const res = await fetch("/api/generate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -4020,7 +4020,7 @@ Return ONLY valid JSON, no markdown:
 ]}`;
 
   try {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
+    const res = await fetch("/api/generate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -4119,7 +4119,7 @@ Return ONLY valid JSON, no markdown:
 ]}`;
 
   try {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
+    const res = await fetch("/api/generate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -4243,7 +4243,7 @@ Return ONLY valid JSON, no markdown:
 {"tag":"Apply|Read|Reflect|Tool","time":"10 min","title":"...","desc":"...","steps":[2-4 steps depending on time, each a single concrete action],"whyBase":"..."}`;
 
   try {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
+    const res = await fetch("/api/generate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -4419,7 +4419,7 @@ ${isGoalClarification
     const open = async () => {
       setLoading(true);
       try {
-        const res = await fetch("https://api.anthropic.com/v1/messages", {
+        const res = await fetch("/api/generate", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -4478,7 +4478,7 @@ ${isGoalClarification
       : systemPrompt;
 
     try {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
+      const res = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -4661,7 +4661,7 @@ Rules:
 Return ONLY the statement, nothing else.`;
 
   try {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
+    const res = await fetch("/api/generate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -4741,7 +4741,7 @@ START: Open with one specific, direct question based on what you see in their we
     const open = async () => {
       setLoading(true);
       try {
-        const res = await fetch("https://api.anthropic.com/v1/messages", {
+        const res = await fetch("/api/generate", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -4772,7 +4772,7 @@ START: Open with one specific, direct question based on what you see in their we
     setMessages(updated);
     setLoading(true);
     try {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
+      const res = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -6512,7 +6512,7 @@ Program change made: ${hasChange ? "yes" : "no"}
 Type of change: ${cmds.changeGoal !== undefined ? "goal changed" : cmds.weekGoal ? "weekly focus changed" : cmds.requestedTask ? "custom task requested" : cmds.slowDown ? "pace adjusted" : "insight only"}
 
 Return ONLY valid JSON: {"score": N, "reason": "one short sentence"}`;
-                const res = await fetch("https://api.anthropic.com/v1/messages", {
+                const res = await fetch("/api/generate", {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
                   body: JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 80, messages: [{ role: "user", content: prompt }] }),
@@ -6645,7 +6645,7 @@ Program changes made: ${changes.length ? changes.join("; ") : "none"}
 
 Write the summary in third person ("They were working on...", "They mentioned..."). Keep it under 60 words. Return only the summary text, no preamble.`;
 
-                const res = await fetch("https://api.anthropic.com/v1/messages", {
+                const res = await fetch("/api/generate", {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
                   body: JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 120, messages: [{ role: "user", content: summaryPrompt }] }),
