@@ -13,8 +13,8 @@ export default async function handler(req, res) {
       },
       body: JSON.stringify(body),
     });
-    const text = await response.text();
-    return res.status(200).send(text);
+    const data = await response.json();
+    return res.status(200).json(data);
   } catch (err) {
     console.error("API error:", err);
     return res.status(500).json({ error: "API call failed" });
