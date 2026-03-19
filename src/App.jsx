@@ -1,5 +1,5 @@
-import React from "react";
-import { useState, useEffect, useRef } from "react";
+"use client";
+import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 
 // ─── Tokens ───────────────────────────────────────────────
 const T = {
@@ -18,33 +18,62 @@ const T = {
   shadowMd: "0 8px 32px rgba(26,23,48,0.10)",
 };
 
-// ─── Persistent Storage Helper (artifact-compatible) ─────
-// Uses window.storage API instead of localStorage for Claude artifact compatibility.
-// All operations are async. Keys are auto-sanitized.
+// ─── Persistent Storage Helper (localStorage) ────────────
+// All operations are async-compatible for drop-in replacement.
+// Keys are auto-sanitized.
 const Store = {
   _clean(key) {
-    // Keys: no whitespace, no slashes, no quotes, under 200 chars
     return key.replace(/[\s\/\\"']/g, "").slice(0, 195);
   },
   async get(key) {
     try {
-      const result = await window.storage.get(Store._clean(key));
-      return result?.value ? JSON.parse(result.value) : null;
+      const raw = localStorage.getItem(Store._clean(key));
+      return raw ? JSON.parse(raw) : null;
     } catch { return null; }
   },
   async set(key, value) {
     try {
-      await window.storage.set(Store._clean(key), JSON.stringify(value));
+      localStorage.setItem(Store._clean(key), JSON.stringify(value));
       return true;
     } catch { return false; }
   },
   async del(key) {
     try {
-      await window.storage.delete(Store._clean(key));
+      localStorage.removeItem(Store._clean(key));
       return true;
     } catch { return false; }
   },
 };
+
+
+// ─── Shared Constants (single source of truth) ──────────
+const ROLE_NAMES = ["Architecture/built environment","Arts/performance/sport","Content creation","Creative/design","Data/analytics/BI","Education/teaching","Finance/accounting","Founder/entrepreneur","Government/public sector","Healthcare/medicine","HR/people","Legal/compliance","Marketing/growth","Media/journalism/writing","Mental health/social work","Nonprofit/NGO","Nursing/allied health","Operations/strategy","Product/UX/design","Real estate/property","Research/academia","Retail/hospitality","Sales/BD","Skilled trades","Software/engineering","Supply chain/logistics","Training/L&D","Something else"];
+const URG_TEXTS = ["AI compressing my field faster than expected","Watched peers advance while staying flat","Layoff or restructure changed things","Review or promotion on the line","Drifting, want intentional movement","All of the above","Keen on exploring new opportunities","None of the above"];
+const BLOCKER_TEXTS = ["Not enough time  - days are full","Too much information, don't know where to start","I start but don't follow through","I learn things but don't apply them to actual work","Direction paralysis  - too many options or none that feel right"];
+const SENIORITY_TEXTS = ["0–3 years","4–8 years","9–15 years","16+ years"];
+
+// ─── Shared Helpers (deduplicated) ──────────────────────
+function normalizeBlocker(blocker) {
+  return Array.isArray(blocker) ? blocker : (blocker != null ? [blocker] : []);
+}
+
+function calcStreak(dayStatus) {
+  let s = 0, skipsUsed = 0;
+  for (let d = 1; d <= 56; d++) {
+    if (dayStatus[d] === 'done') s++;
+    else if (dayStatus[d] === 'skipped' && skipsUsed === 0) skipsUsed++;
+    else break;
+  }
+  return s;
+}
+
+function lk(arr, idx) {
+  return (idx !== undefined && idx >= 0) ? arr[idx] || null : null;
+}
+
+function lkm(arr, idxArr) {
+  return (idxArr || []).map(i => arr[i]).filter(Boolean).join(", ");
+}
 
 // ─── Storage key builder (shared between root & dashboard) ─
 function buildDashStorageKey(plan) {
@@ -60,7 +89,7 @@ function buildDashStorageKey(plan) {
 function Q(id) { return questions.find(q => q.id === id); }
 function QOpt(id, idx) { const q = Q(id); return q?.options?.[idx]?.text || ""; }
 
-// ─── Goal texts — single source of truth ──────────────────
+// ─── Goal texts, single source of truth ──────────────────
 // Indices 0-4 match the goal question options order
 const GOAL_TEXTS = [
   "Get a promotion or step into a role that's actually a level up",
@@ -70,7 +99,45 @@ const GOAL_TEXTS = [
   "Feel genuinely solid and confident in my job or career",
 ];
 
-// Archetype identity taglines — shown on dashboard as behavioral reinforcement
+// Archetype identity taglines, shown on dashboard as behavioral reinforcement
+// ─── Curated inspirational quotes — career progress & daily action ───────────
+const CAREER_QUOTES = [
+  { text: "People who track their progress are 42% more likely to achieve their goals than those who don't.", author: "Goal research, Dominican University" },
+  { text: "The most reliable predictor of long-term success isn't talent or intelligence — it's consistent follow-through on small commitments.", author: "Behavioral economics research" },
+  { text: "People who write down their goals and review them weekly are significantly more likely to achieve them.", author: "Goal-setting research" },
+  { text: "Most people overestimate what they can do in a day and underestimate what they can do in a year of consistent effort.", author: "Productivity research" },
+  { text: "The difference between people who make career change happen and those who don't is rarely ambition — it's daily action.", author: "Career transition research" },
+  { text: "Habits that are tied to a specific time and place are far more likely to stick than intentions alone.", author: "Implementation intention research" },
+  { text: "People who share their progress with a peer are significantly more likely to follow through.", author: "Accountability research" },
+  { text: "Identity change precedes behavior change. People who act as if they are already the person they want to become are more likely to get there.", author: "Behavioral psychology" },
+  { text: "The average professional who spends 30 minutes a day on deliberate skill development will outperform peers who don't within 12 months.", author: "Deliberate practice research" },
+  { text: "Completion, not perfection, is the engine of forward motion. Done is always more valuable than ideal.", author: "Behavioral research" },
+  { text: "People who break a large goal into specific weekly tasks are three times more likely to complete it than those who keep the goal abstract.", author: "Implementation research" },
+  { text: "The hardest part of any task is starting. Once you begin, momentum does most of the work.", author: "Activation energy research" },
+  { text: "Reflection without action is rumination. Action without reflection is busyness. The combination is how careers actually move.", author: "Performance psychology" },
+  { text: "People who complete a 30-day streak of any habit are six times more likely to maintain it long-term.", author: "Habit formation research" },
+  { text: "Small wins activate the reward circuits in the brain and make the next effort easier — not harder.", author: "Neuroscience of motivation" },
+  { text: "The most effective professionals don't have more time — they have clearer priorities and fewer open loops.", author: "Cognitive load research" },
+  { text: "Career growth compounds. People who invest in their development consistently for two years outpace peers by a significant margin.", author: "Longitudinal career research" },
+  { text: "Clarity reduces procrastination. The vaguer the goal, the more likely it is to be avoided.", author: "Decision psychology" },
+  { text: "Skipping once rarely derails a habit. Skipping twice in a row often does.", author: "Habit recovery research" },
+  { text: "The act of writing something down transfers it from intention to commitment — and the brain treats commitments differently.", author: "Cognitive psychology" },
+  { text: "People who pursue a goal with a clear 'why' persist longer in the face of obstacles than those motivated by external pressure alone.", author: "Self-determination theory" },
+  { text: "Showing up on days when you don't feel like it is the behavior that separates people who grow from people who plateau.", author: "Performance research" },
+  { text: "The professional who does one specific thing each day compounds faster than the one who does ten things occasionally.", author: "Compound learning research" },
+  { text: "Momentum is easier to maintain than to restart. The most important task on any given day is simply not stopping.", author: "Behavioral research" },
+  { text: "People tend to overweight recent evidence and underweight long-term patterns. A single hard day is almost never evidence of failure.", author: "Cognitive bias research" },
+  { text: "The best time to plan your next move is immediately after completing your last one — when context is fresh and confidence is high.", author: "Planning research" },
+  { text: "Waiting until you feel ready is one of the most reliable ways to never begin. Readiness follows action, not the other way around.", author: "Behavioral research" },
+  { text: "People who review their week and name what went well are more likely to repeat those behaviors the following week.", author: "Positive psychology research" },
+  { text: "The professionals who advance fastest are rarely the most talented — they are the most consistent.", author: "Career development research" },
+  { text: "A 1% improvement each week compounds to a 67% improvement over a year. Daily consistency matters more than occasional intensity.", author: "Compound growth research" },
+];
+
+function pickQuote(dayNum) {
+  return CAREER_QUOTES[dayNum % CAREER_QUOTES.length];
+}
+
 const ARCHETYPE_IDENTITY = {
   "The Compounder":   "Already moving. Now it's about making sure it compounds.",
   "The Cartographer":  "Building the full picture before acting. That's the work.",
@@ -78,12 +145,12 @@ const ARCHETYPE_IDENTITY = {
   "The Scout":   "Mapping before committing. The clarity comes before the move.",
   "The Incumbent":  "Years of real expertise. This is about making sure it holds.",
   "The Navigator": "Thinking before moving. The plan has to be worth trusting.",
-  "The Launchpad":    "Earlier than most — and that's exactly where the advantage is.",
+  "The Launchpad":    "Earlier than most, and that's exactly where the advantage is.",
   "The Skeptic": "Evidence first, action second. The program works the same way.",
   "The Pivot":  "Starting from where you actually are. The program meets you there.",
 };
 
-// Archetype completion lines — shown after completing a task
+// Archetype completion lines, shown after completing a task
 const ARCHETYPE_COMPLETION = {
   "The Compounder":   "That's how operators compound. One real thing at a time.",
   "The Cartographer":  "You're building the mental model. This is the work.",
@@ -202,6 +269,14 @@ const ACHIEVEMENTS = [
   },
 ];
 
+// ─── Creds tier milestones ─────────────────────────────────
+const CRED_MILESTONES = [
+  { at: 50,  tier: "Operative",  copy: "You've moved past intention. This is what consistency looks like." },
+  { at: 100, tier: "Strategist", copy: "A hundred Creds in. The program is working." },
+  { at: 200, tier: "Senior",     copy: "Two hundred Creds. Most people never get here." },
+  { at: 350, tier: "Principal",  copy: "This is what real commitment looks like." },
+];
+
 function buildProfile(profileName, role, seniority, answers, classification) {
   const r = role.toLowerCase();
   const senior  = seniority >= 2;
@@ -220,38 +295,18 @@ function buildProfile(profileName, role, seniority, answers, classification) {
   } = classification || {};
 
   const goal      = answers?.goal;
-  const concern   = answers?.biggest_concern;
-  const blocker   = answers?.blocker;
-  const aiLevel   = answers?.ai_level ?? 1;
-  const tried     = answers?.already_tried || [];
-  const triedReal = tried.filter(x => x !== 5);
-  const valuable  = answers?.what_feels_valuable || [];
-  const learnStyle = answers?.learn_style || [];
-  const sliderOutcome  = answers?.style_outcome_process   ?? 50; // <50 = action, >50 = understand
-  const sliderExternal = answers?.style_external_internal ?? 50; // <50 = external, >50 = internal
-
-  const isDeepCommitted  = false; // time question removed
-  const isTimeConstrained = false; // time question removed
-  const wantsFrameworks   = learnStyle.includes(4);
-  const wantsHandsOn      = learnStyle.includes(1);
-  const wantsExamples     = learnStyle.includes(3) || valuable.includes(4);
-  const wantsStrategicView = valuable.includes(5) || valuable.includes(2);
-  const wantsActionPlan   = valuable.includes(3);
-  const hasTriedTools     = tried.includes(3);          // actually used tools
-  const hasTriedCourses   = tried.includes(1);          // YouTube/courses
-  const hasTriedMentor    = tried.includes(4);          // talked to mentor
-  const wantsVisible      = isExternallyMotivated;
-  const wantsPrivate      = isInternallyMotivated;
-  const strongAction      = sliderOutcome < 30;         // dragged hard toward action
-  const strongUnderstand  = sliderOutcome > 70;         // dragged hard toward understanding
+  const blockerArr = normalizeBlocker(answers?.blocker);
+  const sliderOutcome  = answers?.style_outcome_process   ?? 50;
+  const wantsVisible   = isExternallyMotivated;
+  const wantsPrivate   = isInternallyMotivated;
+  const strongAction   = sliderOutcome < 30;
+  const strongUnderstand = sliderOutcome > 70;
 
   const profiles = {
     // ─── HIGH READINESS ──────────────────────────────────────
     "The Compounder": {
       headline: (() => {
-        if (concern === 0) return `You're engaged with this and already moving. The question is whether you're building depth  - or just staying busy.`;
-        if (concern === 1) return `You're ahead. The real risk now is spreading effort across too many fronts instead of going deep on the things that actually compound.`;
-        if (goal === 2)    return `You're ahead of most people. That's a promotion-level advantage. Make it visible.`;
+        if (goal === 2) return `You're ahead of most people. That's a promotion-level advantage. Make it visible.`;
         return veteran
           ? `You're a veteran and you're already using AI. Your plan is about compounding that edge, not just maintaining it.`
           : senior
@@ -259,16 +314,12 @@ function buildProfile(profileName, role, seniority, answers, classification) {
           : `You're early in your career and already ahead on AI. Most of your peers haven't started. The question now is how to build on that, not just hold it.`;
       })(),
       description: (() => {
-        if (hasTheoryGap && wantsHandsOn) return `You're engaged with this, but you can feel the gap between how often you engage and how much it's actually changed your work. You learn by doing, so your plan is built around making things, not reading about them.`;
         if (hasTheoryGap) return `You're engaged with what's changing, but you can feel the gap between familiarity and depth. The next move is going from ad hoc to systematic.`;
         if (wantsVisible) return `You've moved past awareness into action. Your plan produces output other people notice.`;
         if (wantsPrivate) return `You've moved past awareness into action. Your plan builds depth quietly. The kind that shows up in results.`;
         return `You've moved past awareness into action. The risk now is spreading thin across too many fronts. One deep capability beats five shallow ones.`;
       })(),
       entryPoint: (() => {
-        if (wantsHandsOn && blocker === 3) return "Take what's already working. Make it repeatable enough to hand off.";
-        if (blocker === 0 || isTimeConstrained) return "Pick the one thing that's already working. Make it faster, then shareable.";
-        if (blocker === 3) return "Take the thing that's already working. Build a version that runs the same way every time.";
         if (wantsVisible) return "Pick the output that would be most useful to show someone. Build it today.";
         return "Pick the one thing that's already working. Make it twice as good.";
       })(),
@@ -277,23 +328,16 @@ function buildProfile(profileName, role, seniority, answers, classification) {
 
     "The Cartographer": {
       headline: (() => {
-        if (concern === 5) return `You can feel the blind spots. Closing them takes building the right mental model, not just adding more inputs.`;
-        if (concern === 1) return `The question is whether your model of what's happening is solid enough to navigate what's coming.`;
         return veteran
           ? `You've got the experience. What's missing is the framework. A way of thinking about what's changing that holds up as things keep evolving.`
           : `You want to understand what's happening well enough to make real decisions, not just react to whatever's new.`;
       })(),
       description: (() => {
-        if (isPureNavigator && wantsStrategicView) return `You want to understand what's changing well enough to make calls that hold up. You said that was the most important thing. Your plan builds exactly that clarity.`;
         if (isPureNavigator) return `You want to understand the landscape well enough to make calls that hold up. That kind of strategic clarity is rarer than just keeping busy, and worth more.`;
-        if (wantsFrameworks) return `You're building something harder to replicate than surface-level activity. The people who last aren't the fastest movers. They're the ones with the right mental model. You learn through frameworks, so your plan is built that way.`;
         if (strongUnderstand) return `You told us understanding comes first. That instinct produces something most people never develop: a mental model that holds up as things keep changing.`;
         return `Surface-level busyness doesn't interest you. The people who thrive long-term develop a durable mental model of what's actually changing. That's what you're building.`;
       })(),
-      entryPoint: (() => {
-        if (wantsFrameworks) return "Build the mental model first. What are the three most consequential things changing in how judgment works in your field?";
-        return "Map how the landscape is changing the judgment layer of your work. Start there, not with the execution layer.";
-      })(),
+      entryPoint: "Map how the landscape is changing the judgment layer of your work. Start there, not with the execution layer.",
       taskEmphasis: "read",
     },
 
@@ -301,78 +345,50 @@ function buildProfile(profileName, role, seniority, answers, classification) {
     "The Primed": {
       headline: (() => {
         if (hasTheoryGap) return `You've read the articles. Watched the videos. You know what's happening. What's missing is a system that converts that awareness into daily practice.`;
-        if (isFrustrated) return `You've tried things and none of them stuck. It's a structure problem, not a motivation one. Your plan works differently.`;
-        if (concern === 0) return `The gap between knowing what to do and actually doing it is exactly where you are. The tasks below close it fast.`;
-        if (blocker === 2) return `You've started before and lost the thread. Every task below has a clear endpoint. You'll know when it's done.`;
+        if (blockerArr.includes(2)) return `You've started before and lost the thread. Every task below has a clear endpoint. You'll know when it's done.`;
         return senior
           ? `You've built years of expertise. The missing piece isn't more reading. It's a system that turns awareness into practice.`
           : `You know what matters and what's changing. The gap isn't motivation. The right structure for turning that into practice hasn't appeared yet.`;
       })(),
       description: (() => {
-        if (hasTheoryGap && hasTriedCourses) return `You've done the courses and read the threads. You know more than most. The gap is that you haven't found a use case that made it feel real. Your plan fixes that. Everything is applied to work that actually matters to you.`;
         if (hasTheoryGap) return `You've built up more awareness than practice. The move from knowing to doing is almost entirely a structure problem. Your plan is built around application.`;
-        if (isFrustrated && hasTriedTools) return `You've actually tried things, so you know this isn't about effort. The people who break through stopped sampling and went deep on one area. Your plan does that.`;
-        if (isFrustrated) return `Your awareness is solid. What's missing is a system that sticks. The people who make real progress found one thing and went deep. Your plan does that.`;
-        if (wantsExamples) return `A few things have clicked, but nothing has fully stuck. You learn best from real examples, so your plan is built around concrete situations from your field, not generic how-tos.`;
         return `You've read, tried things, had conversations about it. The problem isn't that you don't care. Nothing has stuck yet. Awareness without structure fades. Your plan fixes that.`;
       })(),
-      entryPoint: (() => {
-        if (blocker === 0 || isTimeConstrained) return "Five minutes. One tool. One real task. That's enough.";
-        if (blocker === 2) return "Pick one task. Set a timer. Stop when it's done.";
-        if (blocker === 3) return "Skip the reading. Do one real thing today.";
-        if (wantsHandsOn)  return "Open it up. Do one real thing. Skip the tutorial.";
-        return "One tool. One real task. Fifteen minutes.";
-      })(),
+      entryPoint: "One tool. One real task. Fifteen minutes.",
       taskEmphasis: "apply",
     },
 
     "The Scout": {
       headline: (() => {
-        if (concern === 5) return `Blind spots bother you more than the tools. A map closes them faster than any tutorial.`;
-        if (concern === 1) return `You want to know which parts of your work are actually exposed before you decide where to move. Your plan starts there.`;
-        if (goal === 3)    return `You want to build something new, not just protect what you have. The first step is understanding what's actually changed.`;
+        if (goal === 3) return `You want to build something new, not just protect what you have. The first step is understanding what's actually changed.`;
         return senior
           ? `You've built real expertise. Before you move, you need to understand what you're moving toward, not just that it matters.`
           : `You know something important is happening. You want to understand it well enough to choose how to engage, not just react.`;
       })(),
       description: (() => {
-        if (blocker === 4 && wantsStrategicView) return `Effort isn't the issue. Signal is. You said you want to understand what's happening well enough to make real decisions. Your plan builds that filter. Every task closes a specific knowledge gap.`;
-        if (blocker === 4) return `Effort isn't the issue. Signal is. Knowing what's worth learning is harder than learning it. Your plan filters that. Everything here is chosen for a specific reason.`;
-        if (blocker === 1) return `You've felt the overwhelm. Too much information, no clear map. That's a curation problem, not a knowledge one. Your plan cuts through it and gives you a sequence.`;
-        if (wantsExamples) return `You want to see how people in your field are actually navigating this before you decide where you fit. Your plan is built around real examples, not thought leadership.`;
-        if (wantsFrameworks) return `You want a framework before you commit to a direction. That instinct is an asset. Your plan gives you the mental model first, then the moves.`;
+        if (blockerArr.includes(4)) return `Effort isn't the issue. Signal is. Knowing what's worth learning is harder than learning it. Your plan filters that. Everything here is chosen for a specific reason.`;
+        if (blockerArr.includes(1)) return `You've felt the overwhelm. Too much information, no clear map. That's a curation problem, not a knowledge one. Your plan cuts through it and gives you a sequence.`;
         return `You need a clear picture before you can act with confidence. That instinct is an asset. Your plan builds the map.`;
       })(),
-      entryPoint: (() => {
-        if (wantsExamples) return "Find three real examples of how people in your field are navigating this. Understand one before you try anything.";
-        if (blocker === 1) return "One frame, not twenty articles. Understand the shape of what's happening, then decide where you fit.";
-        if (wantsFrameworks) return "Build the map before you move. Start with what's actually changing in your specific field.";
-        return "Start with the landscape. Understand what's actually happening in your field before you decide where to move.";
-      })(),
+      entryPoint: "Start with the landscape. Understand what's actually happening in your field before you decide where to move.",
       taskEmphasis: "read",
     },
 
     "The Incumbent": {
       headline: (() => {
         if (isCredibilityDefender) return `You've built something real. Credibility that took years. Your job right now is knowing which parts of that are protected, and which parts need active work.`;
-        if (concern === 1)         return `You want to know which parts of your work are actually at risk. That's the right question. It has a more specific answer than anything you've read so far.`;
-        if (concern === 4)         return `Younger people move faster. That's real. But they don't have your context, your judgment, or your network. The question is how to make sure that combination is visible.`;
         if (isAnxietyDriven)       return `The anxiety is real and it's tracking something real. The gap between where you are and where you need to be has a specific size. Your plan makes it concrete.`;
         return senior
           ? `You've spent years building expertise that genuinely can't be replaced. Your plan maps exactly which parts are protected and which parts need active reinforcing.`
           : `You've built real skills. Things are changing in your field. The uncertainty isn't whether it matters. It's not knowing which parts of what you've built are safe.`;
       })(),
       description: (() => {
-        if (isCredibilityDefender && hasTriedMentor) return `You've already talked to someone you trust about this. You're waiting for a more specific answer than you got. Your plan goes there: exactly what's changing in your work, and what isn't.`;
         if (isCredibilityDefender) return `Your professional credibility is a real asset. The move isn't to become something different. It's to understand what's changing well enough to position what you've built as more valuable, not less.`;
-        if (isAnxietyDriven && wantsActionPlan) return `The anxiety is tracking something real. You said you want a clear weekly plan, not vague advice. Your plan is concrete: specific things, in order, with a clear end.`;
         if (isAnxietyDriven)       return `The anxiety is tracking something real. The feeling of being behind and the actual gap are two different things. Your plan makes the gap specific, because specific is always smaller than vague.`;
-        if (wantsStrategicView)    return `You're careful, not resistant. You want to understand how your role is actually changing before you decide what to do about it. That's the right order.`;
         return `You're careful, not resistant. You've invested years into expertise that has real value, and you need to know which parts are protected. That's due diligence.`;
       })(),
       entryPoint: (() => {
         if (isCredibilityDefender) return "Identify the three things you do that technology can support but can't replace. Build there first.";
-        if (wantsExamples)         return "Find one example of change in your field that worked well for someone at your level of experience. Study what they actually did.";
         return "Name three things you do that no one could walk in and replicate without years of context. Then test that claim.";
       })(),
       taskEmphasis: "reflect",
@@ -381,24 +397,15 @@ function buildProfile(profileName, role, seniority, answers, classification) {
     "The Navigator": {
       headline: (() => {
         if (isPureNavigator) return `The decisions that matter aren't about tools or tactics. They're about judgment. Which bets to make, which risks to flag, what to own. Your plan builds that clarity.`;
-        if (concern === 5)   return `You're aware something structural is missing. The plan below closes the biggest blind spots first.`;
-        if (blocker === 1)   return `Everything feels like a flood right now. Your plan gives you a frame that makes it navigable.`;
         return senior
           ? `You don't need to become an expert in everything. You need to understand what's changing well enough to make the calls your role requires.`
           : `Change is creating decisions that didn't exist before. Your job isn't to master everything. It's to know how to think through them.`;
       })(),
       description: (() => {
-        if (isPureNavigator && wantsFrameworks) return `You're navigating something genuinely complex. You said you learn through frameworks. Your plan is built that way: model-first, not one tactic at a time. You get the structure to make sense of what's changing before you decide what to do.`;
         if (isPureNavigator) return `You're navigating something genuinely complex. The people who do this well built a clear model of what's changing and why. They didn't just try everything. That's what your plan builds.`;
-        if (blocker === 4 && wantsStrategicView) return `You have motivation. What you're missing is a filter and a frame. You said you want to understand what's happening well enough to make real decisions. Your plan builds both.`;
-        if (blocker === 4)   return `You have motivation. What you're missing is a filter. Knowing what's actually worth your attention is harder than getting started. Your plan is that filter, already applied.`;
-        if (hasTriedMentor)  return `You've already sought out perspectives on this. That counts for something. Navigating change well isn't about doing more. It's about building the model that lets you make the right calls. Your plan builds that model.`;
         return `You need a working model of what's changing in your field: what it means for how decisions get made, where the risk is, where the opportunity is. Your plan builds that clarity.`;
       })(),
-      entryPoint: (() => {
-        if (wantsFrameworks) return "Build the strategic frame first. What is actually changing in your field, and what decisions does that create for you?";
-        return "Get the strategic picture first. Then decide which part requires your attention.";
-      })(),
+      entryPoint: "Get the strategic picture first. Then decide which part requires your attention.",
       taskEmphasis: "read",
     },
 
@@ -406,26 +413,19 @@ function buildProfile(profileName, role, seniority, answers, classification) {
     "The Launchpad": {
       headline: (() => {
         if (isHighCommitmentBeginner) return `You've got the time and the intention. What's been missing is an entry point that connects to your actual work. Your plan is that entry point.`;
-        if (concern === 0)            return `The gap between looking behind and being ahead is smaller than it looks. Your plan creates visible movement fast.`;
-        if (concern === 2)            return `The things everyone's talking about aren't as complicated as they seem. One focused session changes your relationship with all of it.`;
-        if (blocker === 2)            return `You've started things before and lost momentum. Every task below has a clear end. Something done, not something to maintain.`;
+        if (blockerArr.includes(2))   return `You've started things before and lost momentum. Every task below has a clear end. Something done, not something to maintain.`;
         return senior
           ? `The gap between where you are and where you need to be is smaller than it looks. It just needs a real first step.`
           : `The gap feels huge. It isn't. You haven't had a starting point that connects to your actual work. That's all this is.`;
       })(),
       description: (() => {
-        if (isHighCommitmentBeginner && wantsHandsOn) return `You're starting with more than most people do: time and a preference for learning by doing. Start doing something. The understanding follows the practice.`;
         if (isHighCommitmentBeginner) return `You're starting with more than most: time and genuine intent. That combination moves fast once it has direction. Your plan gives you that.`;
-        if (blocker === 1)            return `You've felt the overwhelm. The sheer volume of things you could be doing about this. Your plan ignores most of it. There are three things that matter right now. Everything else can wait.`;
-        if (wantsActionPlan)          return `You've been watching this from a distance. You sense it matters. You feel the pressure. You said you wanted a clear weekly plan, not inspiration. That's exactly what this is.`;
+        if (blockerArr.includes(1))   return `You've felt the overwhelm. The sheer volume of things you could be doing about this. Your plan ignores most of it. There are three things that matter right now. Everything else can wait.`;
         if (strongAction)             return `You've been watching this from a distance. You told us you want to act, not read. Your plan skips the theory. It starts with one thing you can do today.`;
         return `You've been watching this from a distance. Reading about it, sensing it matters, feeling the pressure. You haven't found an entry point that clicks. Your plan doesn't start with theory. It starts with one thing you can actually do.`;
       })(),
       entryPoint: (() => {
-        if (isHighCommitmentBeginner && wantsHandsOn) return "Start with one real thing. Read about it later.";
         if (isHighCommitmentBeginner) return "You have more time than most people starting out. Use it today.";
-        if (isTimeConstrained)        return "Five minutes is enough. Pick one thing and start.";
-        if (wantsActionPlan)          return "Task 1 is below. Start there. Everything else follows.";
         return "One small thing. Done. That's the whole game today.";
       })(),
       taskEmphasis: "apply",
@@ -433,49 +433,32 @@ function buildProfile(profileName, role, seniority, answers, classification) {
 
     "The Skeptic": {
       headline: (() => {
-        if (concern === 5)   return `The blind spots are real. Closing them means understanding the actual shape of what's changing first, before you decide where to move.`;
-        if (concern === 1)   return `Before you move, you want to know what you're moving toward. That's the right instinct, as long as it leads somewhere.`;
-        if (blocker === 4)   return `The signal-to-noise problem is real. Your plan cuts through it by giving you the right frame first, not more to consume.`;
-        if (isDeepCommitted) return `You've got the time to understand this properly. Most people are moving fast without a map. You don't have to.`;
+        if (blockerArr.includes(4)) return `The signal-to-noise problem is real. Your plan cuts through it by giving you the right frame first, not more to consume.`;
         return senior
           ? `You haven't moved yet because you haven't seen how this applies to your field in a way that's honest about the nuance. That's a reasonable position to be in.`
           : `You're waiting to understand what's happening well enough that your first moves feel intentional. That's a good instinct, as long as it leads somewhere.`;
       })(),
       description: (() => {
-        if (wantsFrameworks && strongUnderstand) return `You process things by understanding them first. You told us you dragged all the way toward 'understand first' and that frameworks are how you learn. Your plan honours that. No rushing until you have the right model.`;
-        if (wantsFrameworks) return `You process things by understanding them first. You learn through frameworks, so your plan leads with mental models before it asks you to do anything.`;
-        if (wantsExamples)   return `You process things by understanding them first, but not abstractly. You want to see real examples from your field before you commit to a direction. Your plan gives you those, sequenced from most to least relevant.`;
+        if (strongUnderstand) return `You process things by understanding them first. You told us understanding comes first. Your plan honours that. No rushing until you have the right model.`;
         return `You process things by understanding them first. The problem is that most advice is written for people who want quick wins. Your plan gives you the context to move with confidence, not just urgency.`;
       })(),
-      entryPoint: (() => {
-        if (wantsFrameworks) return "Start with the mental model. What is actually changing in your field? Get that clear before you decide where to move.";
-        if (wantsExamples)   return "Find one real example of how someone in your field is navigating this. Read it fully. That's day one.";
-        if (blocker === 4)   return "One clear frame for what's actually changing in your field. A map, not a move.";
-        return "Start by understanding what's actually changing in your field. Specifics, not headlines.";
-      })(),
+      entryPoint: "Start by understanding what's actually changing in your field. Specifics, not headlines.",
       taskEmphasis: "read",
     },
 
     "The Pivot": {
       headline: (() => {
-        if (isFrustrated)    return `You've tried things and nothing landed. That's not a you problem. Most of what's out there isn't built for someone who does what you do. Your plan is.`;
         if (isAnxietyDriven) return `The pressure to adapt is real. So is your skepticism. Your plan doesn't ask you to buy in. It asks you to look at one specific thing and decide for yourself.`;
-        if (concern === 3)   return `Your credibility took years to build. Your plan starts with evidence, not enthusiasm  - because that's the only kind of argument worth your time.`;
         return veteran
           ? `You've seen enough hype cycles to know better than to chase every new thing. Your plan doesn't ask you to buy in. It asks you to look at one specific thing and decide for yourself.`
           : `You're resistant to hype, not to AI. Your plan is built around your actual work, not a hypothetical professional who does something vaguely similar.`;
       })(),
       description: (() => {
-        if (isFrustrated && hasTriedTools) return `You've actually tried things. That separates you from people who haven't started. The problem isn't effort. Nothing was specific enough to your actual work. Your plan starts with your tasks, not generic use cases.`;
-        if (isFrustrated) return `You've tried things and they didn't click. The problem wasn't your effort. The format wasn't built for your actual work. Your plan is.`;
         if (isAnxietyDriven) return `The anxiety you're feeling is real. But forcing enthusiasm you don't have won't help. Find one thing that's genuinely relevant to your work, and let that be the starting point.`;
-        if (wantsExamples) return `You're resistant to content that isn't relevant to you. You learn from real examples. Your plan is built around actual situations from your field  - what people like you are doing, and what's actually working.`;
-        if (hasTriedCourses && hasTriedMentor) return `You've tried to get traction more than once. Courses, conversations. It still hasn't clicked for your field specifically. The problem isn't you. Every source was written for a generic professional. Your plan was written for you.`;
         return `Every article, every newsletter, every piece of advice has felt generic. Written for a hypothetical professional, not for someone who does what you do. Your skepticism is earned. Your plan starts with your specific work and builds from there.`;
       })(),
       entryPoint: (() => {
-        if (isFrustrated)  return "One thing that's different from everything you've tried. That's all.";
-        if (wantsExamples) return `Find one person navigating something like your situation in a way that would have been useful to you six months ago. Study what they actually did.`;
+
         return "Find one real example of someone in your field making progress on something like this. Just one that would have mattered to you six months ago.";
       })(),
       taskEmphasis: "reflect",
@@ -489,144 +472,145 @@ function buildProfile(profileName, role, seniority, answers, classification) {
 
 // ─── Classifier ───────────────────────────────────────────
 function classifyProfile(answers) {
-  const tried      = answers.already_tried    || [];
-  const valuable   = answers.what_feels_valuable || [];
-  const learnStyle = answers.learn_style      || [];
-  const triedReal  = tried.filter(x => x !== 5); // 5 = "nothing yet"
+  // Remaining questions: name, role, seniority, urgency,
+  // style_outcome_process, goal, blocker
+  // Removed: learn_style, time_available, career_situation,
+  //          style_external_internal, already_tried
 
-  // ── New: career situation + urgency axes (Change 1) ──────────────────────
-  const careerSituation = answers.career_situation ?? -1;
-  const urgencyTrigger  = answers.urgency         ?? -1;
-  // career_situation: 0=anxious/doing-well, 1=stuck, 2=looking, 3=displaced, 4=successful-worried, 5=growth-track
-  // urgency: 0=AI field change, 1=peers advancing, 2=layoff/restructure, 3=review/promotion, 4=drifting, 5=all
-  const isInTransition   = careerSituation === 3;                     // recently displaced
-  const isStagnating     = careerSituation === 1;                     // stuck at same level too long
-  const isHighPerformerFear = careerSituation === 4;                  // successful but quietly afraid
-  const isBuildingToward = careerSituation === 5;                     // doing well, wants to accelerate (growth track)
-  const isUrgencyLayoff  = urgencyTrigger  === 2;                     // layoff/restructure trigger
-  const isUrgencyPromotion = urgencyTrigger === 3;                    // review/promotion pressure
-  const isUrgencyDrift   = urgencyTrigger  === 4;                     // drifting, want intentionality
+  // blocker is now multi-select (array of indices). For single-index lookups use primary.
+  const blockerArr = normalizeBlocker(answers.blocker);
+  const primaryBlocker = blockerArr[0] ?? -1;
+
+  const urgencyTrigger  = answers.urgency ?? -1;
+  const isInTransition   = false; // career_situation removed
+  const isStagnating     = false;
+  const isHighPerformerFear = false;
+  const isBuildingToward = false;
+  const isUrgencyLayoff    = urgencyTrigger === 2;
+  const isUrgencyPromotion = urgencyTrigger === 3;
+  const isUrgencyDrift     = urgencyTrigger === 4;
+  const careerSituation    = -1; // career_situation removed
 
   // ══════════════════════════════════════════════════════════
   // AXIS 1: READINESS
-  // How far along are they actually , behavior over self-report
+  // Sources: seniority (experience proxy), blocker (self-awareness signal),
+  //          urgency (motivation clarity), style slider (action-vs-understand)
+  // Range roughly 0–100. Thresholds: high ≥ 70, medium ≥ 35, low < 35.
   // ══════════════════════════════════════════════════════════
   let readiness = 0;
 
-  // Q3: AI level , primary self-report (0/30/60/90)
-  readiness += [0, 30, 60, 90][answers.ai_level] ?? 0;
+  // Seniority: more experience = higher baseline readiness
+  readiness += [10, 25, 45, 55, 65][answers.seniority] ?? 25;
 
-  // Q10: already_tried , behavioral evidence, weighted by effort level
-  if (triedReal.length > 0) readiness += Math.min(triedReal.length * 6, 24);
-  if (tried.includes(3)) readiness += 14; // actually used tools , highest signal
-  if (tried.includes(1)) readiness += 6;  // YouTube/courses , intentional consumption
-  if (tried.includes(4)) readiness += 4;  // talked to mentor , actively seeking
-  if (tried.includes(2)) readiness += 3;  // attended conference , committed enough to show up
-  if (tried.includes(0)) readiness += 2;  // newsletters , passive but engaged
+  // Blocker signal: some blockers indicate higher self-awareness (readiness+)
+  // "learns but doesn't apply" (3) = has been engaging, just stuck → +15
+  // "direction paralysis" (4) = aware enough to feel overwhelm → +8
+  // "can't follow through" (2) = has started things → +10
+  // "too much info" (1) = early stage paralysis → +5
+  // "not enough time" (0) = neutral → +8
+  const blockerReadiness = [8, 5, 10, 15, 8];
+  readiness += blockerArr.length > 0
+    ? Math.round(blockerArr.reduce((sum, b) => sum + (blockerReadiness[b] ?? 5), 0) / blockerArr.length)
+    : 5;
 
-  // Q4: what_feels_valuable , engagement depth signal
-  if (valuable.length >= 3) readiness += 8;   // actively thinking across dimensions
-  if (valuable.includes(3)) readiness += 6;   // "clear weekly plan" → ready to act now
-  if (valuable.includes(0)) readiness += 3;   // "which tools matter" → tool-aware
+  // Urgency: some urgencies signal clearer self-awareness
+  // review/promotion (3) = concrete goal, high readiness signal → +12
+  // peers advancing (1) = competitive awareness → +8
+  // drifting (4) = self-aware but low urgency → +5
+  // AI field change (0) = awareness → +8
+  // layoff (2) = reactive, not necessarily ready → +3
+  // exploring (5) = open but undirected → +5
+  // none (6) = low signal → 0
+  readiness += [8, 8, 3, 12, 5, 8, 5, 0][answers.urgency] ?? 0;
 
-  // Q12: time commitment , intent signal
-  // High time commitment at low AI level = motivated beginner → boost
-  // Very low time at very low AI = low commitment → small penalty
-  // time question removed; readiness no longer modulated by stated time
+  // Style slider: strong action-oriented people have higher readiness
+  const sliderVal = answers.style_outcome_process ?? 50;
+  if (sliderVal < 25) readiness += 10;       // very action-oriented
+  else if (sliderVal < 40) readiness += 5;   // action-leaning
+  // understanding-oriented doesn't reduce readiness, just doesn't add
 
-  // Q2: seniority × AI level , being senior with no AI usage means further behind
-  if (answers.seniority >= 2 && answers.ai_level <= 1) readiness -= 12;
-  if (answers.seniority >= 3 && answers.ai_level === 0) readiness -= 8;
-
-  const readinessLevel = readiness >= 120 ? "high" : readiness >= 50 ? "medium" : "low";
+  const readinessLevel = readiness >= 70 ? "high" : readiness >= 35 ? "medium" : "low";
 
   // ══════════════════════════════════════════════════════════
   // AXIS 2: ORIENTATION
-  // What are they trying to accomplish?
-  // optimizer = grow/advance | protector = defend | navigator = lead/understand
+  // Sources: goal (primary), blocker (secondary), role + seniority (structural)
   // ══════════════════════════════════════════════════════════
   let optScore = 0, protScore = 0, navScore = 0;
 
-  // Q7: goal , strongest orientation signal
+  // goal — strongest orientation signal
   const goalMap = {
-    0: { opt: 3, prot: 0, nav: 1 }, // be the go-to → optimizer
-    1: { opt: 0, prot: 5, nav: 0 }, // protect current role → strong protector
-    2: { opt: 5, prot: 0, nav: 0 }, // get promoted → strong optimizer
-    3: { opt: 2, prot: 0, nav: 2 }, // new skills → optimizer + navigator
-    4: { opt: 0, prot: 3, nav: 1 }, // feel confident → protector-leaning
-    5: { opt: 0, prot: 0, nav: 5 }, // decisions for team → strong navigator
+    0: { opt: 3, prot: 0, nav: 1 }, // promotion / level-up → optimizer
+    1: { opt: 0, prot: 5, nav: 0 }, // move to better company → protector
+    2: { opt: 5, prot: 0, nav: 0 }, // real pivot → strong optimizer
+    3: { opt: 2, prot: 0, nav: 2 }, // build relevant skills → optimizer + navigator
+    4: { opt: 0, prot: 3, nav: 1 }, // feel solid and confident → protector-leaning
+    5: { opt: 2, prot: 0, nav: 2 }, // explore new opportunities → optimizer + navigator
   };
   const g = goalMap[answers.goal] || { opt: 0, prot: 0, nav: 0 };
   optScore += g.opt; protScore += g.prot; navScore += g.nav;
 
-  // Q6: biggest concern , confirms or cross-cuts goal
-  const fearMap = {
-    0: { opt: 2, prot: 1, nav: 0 }, // seen as behind → visible wins → optimizer
-    1: { opt: 0, prot: 4, nav: 1 }, // role at risk → strong protector
-    2: { opt: 2, prot: 0, nav: 1 }, // don't understand tools → optimizer/nav
-    3: { opt: 0, prot: 5, nav: 0 }, // credibility erosion → strong protector
-    4: { opt: 1, prot: 2, nav: 0 }, // younger people faster → protector
-    5: { opt: 0, prot: 1, nav: 3 }, // blind spots → navigator
-  };
-  const f = fearMap[answers.biggest_concern] || { opt: 0, prot: 0, nav: 0 };
-  optScore += f.opt; protScore += f.prot; navScore += f.nav;
-
-  // Q9: blocker , behavioral orientation signal
+  // blocker — behavioral orientation signal
   const blockerMap = {
     0: { opt: 1, prot: 1, nav: 0 }, // time → neutral
-    1: { opt: 0, prot: 0, nav: 3 }, // overwhelm → navigator (needs map first)
-    2: { opt: 3, prot: 0, nav: 0 }, // can't follow through → optimizer (needs action)
-    3: { opt: 3, prot: 0, nav: 0 }, // learns but doesn't apply → optimizer (wants practice)
-    4: { opt: 0, prot: 1, nav: 3 }, // don't know what's worth it → navigator
+    1: { opt: 0, prot: 0, nav: 3 }, // overwhelm → navigator
+    2: { opt: 3, prot: 0, nav: 0 }, // can't follow through → optimizer
+    3: { opt: 3, prot: 0, nav: 0 }, // learns but doesn't apply → optimizer
+    4: { opt: 0, prot: 1, nav: 3 }, // direction paralysis → navigator
   };
-  const b = blockerMap[answers.blocker] || { opt: 0, prot: 0, nav: 0 };
-  optScore += b.opt; protScore += b.prot; navScore += b.nav;
-
-  // Q4: what_feels_valuable , secondary orientation (0.5x weight)
-  const valuableOrientMap = {
-    0: { opt: 1, prot: 0, nav: 1 }, // which tools matter
-    1: { opt: 2, prot: 0, nav: 0 }, // skills to build
-    2: { opt: 0, prot: 1, nav: 2 }, // how role might change → protective/nav
-    3: { opt: 2, prot: 0, nav: 0 }, // clear weekly plan → action-seeker
-    4: { opt: 1, prot: 0, nav: 1 }, // examples from field
-    5: { opt: 0, prot: 0, nav: 3 }, // understand to make decisions → navigator
-  };
-  valuable.forEach(v => {
-    const vm = valuableOrientMap[v] || { opt: 0, prot: 0, nav: 0 };
-    optScore += vm.opt * 0.5; protScore += vm.prot * 0.5; navScore += vm.nav * 0.5;
+  blockerArr.forEach(b => {
+    const bv = blockerMap[b] || { opt: 0, prot: 0, nav: 0 };
+    optScore += bv.opt; protScore += bv.prot; navScore += bv.nav;
   });
 
-  // Q11: learn_style , tertiary orientation signal
-  if (learnStyle.includes(5)) navScore += 1;       // reflecting → self-aware, navigator tendency
-  if (learnStyle.includes(4)) navScore += 1.5;     // frameworks → strategic thinker
-  if (learnStyle.includes(3)) navScore += 1;        // industry examples → context-seeker
-  if (learnStyle.includes(1)) optScore += 1;        // hands-on → optimizer
-  if (learnStyle.includes(2)) optScore += 0.5;      // summaries → efficiency → optimizer
+  // urgency — secondary orientation signal
+  const urgencyOrientMap = {
+    0: { opt: 1, prot: 1, nav: 1 }, // AI disruption → mixed
+    1: { opt: 2, prot: 1, nav: 0 }, // peers advancing → optimizer/protector
+    2: { opt: 0, prot: 2, nav: 1 }, // layoff/restructure → protector
+    3: { opt: 3, prot: 0, nav: 0 }, // review/promotion on line → optimizer
+    4: { opt: 1, prot: 0, nav: 2 }, // drifting → navigator
+    5: { opt: 4, prot: 0, nav: 2 }, // field transition → strong optimizer + navigator
+    6: { opt: 1, prot: 1, nav: 1 }, // keen on exploring → balanced
+    7: { opt: 0, prot: 0, nav: 0 }, // none of the above → neutral
+  };
+  const u = urgencyOrientMap[urgencyTrigger] || { opt: 0, prot: 0, nav: 0 };
+  optScore += u.opt; protScore += u.prot; navScore += u.nav;
 
-  // Q10: already_tried specific signals
-  if (tried.includes(4)) navScore += 0.5;           // talked to mentor → seeks guidance
-  if (tried.includes(0)) navScore += 0.5;           // newsletters → passive intake → nav tendency
-
-  // Q1: role , structural orientation by field
-  // Some roles have embedded protector or navigator psychology regardless of individual answers
+  // role — structural orientation by field (indices match dropdown order)
   const roleOrientMap = {
-    0:  { opt: 1,   prot: 0,   nav: 0   }, // software → optimizer by default
-    1:  { opt: 1,   prot: 0,   nav: 0.5 }, // data → optimizer + light nav
-    2:  { opt: 0,   prot: 1.5, nav: 0.5 }, // finance → protector (risk-trained) + nav
-    3:  { opt: 1,   prot: 0,   nav: 0   }, // marketing → optimizer
-    4:  { opt: 0,   prot: 2,   nav: 0.5 }, // legal → strong protector (professional caution)
-    5:  { opt: 0.5, prot: 0,   nav: 1   }, // ops/strategy → navigator
-    6:  { opt: 1,   prot: 0,   nav: 0.5 }, // design/product → optimizer + nav
-    7:  { opt: 0,   prot: 0.5, nav: 1.5 }, // HR → navigator (people decisions)
-    8:  { opt: 1.5, prot: 0,   nav: 0   }, // sales → strong optimizer
-    9:  { opt: 0,   prot: 1.5, nav: 1   }, // healthcare → protector (professional caution)
-    10: { opt: 0,   prot: 0.5, nav: 1.5 }, // education → navigator (frameworks, systems)
-    11: { opt: 0,   prot: 0,   nav: 2   }, // exec/other → navigator (strategic decisions)
+    0:  { opt: 0.5, prot: 1,   nav: 0.5 }, // Architecture / built environment
+    1:  { opt: 1,   prot: 0.5, nav: 0   }, // Arts / performance / sport
+    2:  { opt: 1.5, prot: 0,   nav: 0   }, // Content creation
+    3:  { opt: 1,   prot: 0.5, nav: 0   }, // Creative / design
+    4:  { opt: 1,   prot: 0,   nav: 0.5 }, // Data / analytics / BI
+    5:  { opt: 0,   prot: 0.5, nav: 1.5 }, // Education / teaching
+    6:  { opt: 0,   prot: 1.5, nav: 0.5 }, // Finance / accounting
+    7:  { opt: 2,   prot: 0,   nav: 0   }, // Founder / entrepreneur
+    8:  { opt: 0,   prot: 1,   nav: 1   }, // Government / public sector
+    9:  { opt: 0,   prot: 1.5, nav: 1   }, // Healthcare / medicine
+    10: { opt: 0,   prot: 0.5, nav: 1.5 }, // HR / people / recruiting
+    11: { opt: 0,   prot: 2,   nav: 0.5 }, // Legal / compliance
+    12: { opt: 1,   prot: 0,   nav: 0   }, // Marketing / growth
+    13: { opt: 0.5, prot: 1,   nav: 0   }, // Media / journalism / writing
+    14: { opt: 0,   prot: 0.5, nav: 1   }, // Mental health / social work
+    15: { opt: 0,   prot: 0.5, nav: 1   }, // Nonprofit / charity / NGO
+    16: { opt: 0,   prot: 1.5, nav: 0.5 }, // Nursing / allied health
+    17: { opt: 0.5, prot: 0,   nav: 1   }, // Operations / strategy
+    18: { opt: 1,   prot: 0,   nav: 0.5 }, // Product / UX / design
+    19: { opt: 1,   prot: 1,   nav: 0   }, // Real estate / property
+    20: { opt: 0.5, prot: 0.5, nav: 1   }, // Research / academia
+    21: { opt: 0.5, prot: 1,   nav: 0   }, // Retail / hospitality management
+    22: { opt: 1.5, prot: 0,   nav: 0   }, // Sales / business development
+    23: { opt: 0.5, prot: 1.5, nav: 0   }, // Skilled trades
+    24: { opt: 1,   prot: 0,   nav: 0   }, // Software / engineering
+    25: { opt: 0,   prot: 1,   nav: 0.5 }, // Supply chain / logistics
+    26: { opt: 0,   prot: 0,   nav: 1.5 }, // Training / instructional design
+    27: { opt: 0,   prot: 0,   nav: 0   }, // Something else
   };
   const r = roleOrientMap[answers.role] || { opt: 0, prot: 0, nav: 0 };
   optScore += r.opt; protScore += r.prot; navScore += r.nav;
 
-  // Q2: seniority nudge , veterans default toward protecting what they've built
+  // seniority nudge
   if (answers.seniority >= 3) protScore += 2;
   if (answers.seniority <= 1) optScore += 1;
 
@@ -634,17 +618,12 @@ function classifyProfile(answers) {
     : protScore >= navScore ? "protector" : "navigator";
 
   // ══════════════════════════════════════════════════════════
-  // AXIS 3: APPROACH STYLE , action vs. understanding
-  // Sources: Q5 slider (primary), Q8 slider, Q11 learn_style, Q10 tried pattern
+  // AXIS 3: APPROACH STYLE
+  // Source: style_outcome_process slider only
   // ══════════════════════════════════════════════════════════
-  const sliderOutcome  = answers.style_outcome_process   ?? 50;
-  const sliderExternal = answers.style_external_internal ?? 50;
-  const isExternallyMotivated = sliderExternal < 50;
-  const isInternallyMotivated = sliderExternal > 50;
+  const sliderOutcome = answers.style_outcome_process ?? 50;
 
   let actionSignal = 0, understandSignal = 0;
-
-  // Q5 slider , primary signal (stronger weight toward extremes)
   if      (sliderOutcome < 25) actionSignal     += 5;
   else if (sliderOutcome < 40) actionSignal     += 3;
   else if (sliderOutcome < 50) actionSignal     += 1;
@@ -652,100 +631,81 @@ function classifyProfile(answers) {
   else if (sliderOutcome > 60) understandSignal += 3;
   else if (sliderOutcome > 50) understandSignal += 1;
 
-  // Q11: learn_style , confirms or cross-cuts slider
-  if (learnStyle.includes(1)) actionSignal     += 2; // hands-on
-  if (learnStyle.includes(2)) actionSignal     += 1; // summaries/no fluff
-  if (learnStyle.includes(4)) understandSignal += 2; // frameworks
-  if (learnStyle.includes(0)) understandSignal += 1; // reading articles
-  if (learnStyle.includes(5)) understandSignal += 1; // reflecting
-  if (learnStyle.includes(3)) understandSignal += 1; // industry examples (wants context)
-
-  // Q10: tried pattern , "tried lots, still stuck" = pragmatic, not understanding-seeker
-  if (triedReal.length >= 3 && answers.ai_level <= 1) actionSignal += 2; // frustrated → needs action, not more reading
-
-  // time question removed
+  // blocker cross-signal for approach
+  if (blockerArr.includes(2)) actionSignal += 2;     // can't follow through → needs action
+  if (blockerArr.includes(1)) understandSignal += 2; // overwhelm → needs map first
 
   const approachStyle = actionSignal > understandSignal + 1 ? "action"
     : understandSignal > actionSignal + 1 ? "understanding" : "balanced";
 
-  const isActionOriented       = approachStyle === "action";
+  const isActionOriented        = approachStyle === "action";
   const isUnderstandingOriented = approachStyle === "understanding";
-  const isOutcomeOriented = sliderOutcome < 50;
-  const isProcessOriented = sliderOutcome > 50;
+  const isOutcomeOriented       = sliderOutcome < 50;
+  const isProcessOriented       = sliderOutcome > 50;
+
+  // style_external_internal removed — derive behavioral style from remaining signals
+  const isExternallyMotivated = urgencyTrigger === 1 || urgencyTrigger === 3; // peers/promotion
+  const isInternallyMotivated = !isExternallyMotivated;
 
   // ══════════════════════════════════════════════════════════
-  // PATTERN DETECTION , cross-answer combinations
-  // These detect behavioral archetypes that single-axis scoring misses
+  // PATTERN DETECTION
   // ══════════════════════════════════════════════════════════
 
-  // Frustration pattern: tried many approaches, still at low AI level
-  // → These are not Researchers (patient) , they're stuck and need something different
-  const isFrustrated = triedReal.length >= 3 && answers.ai_level <= 1;
+  const isFrustrated = false; // already_tried removed
 
-  // Anxiety-driven: concern = younger people moving faster, goal = feel confident
-  // → Pure protector regardless of optimizer score
-  const isAnxietyDriven = answers.biggest_concern === 4 && answers.goal === 4;
+  // Theory-practice gap: blocker is "learns but doesn't apply"
+  const hasTheoryGap = blockerArr.includes(3);
 
-  // Pure navigator: wants strategic decisions AND blind spots are the concern
-  // → Amplify nav, override weak signals
-  const isPureNavigator = false; // goal 5 removed
+  // High-commitment beginner: low readiness but action-oriented
+  const isHighCommitmentBeginner = readinessLevel === "low" && isActionOriented;
 
-  // Theory-practice gap: learns but doesn't apply, AND has tried courses/newsletters
-  // → Strong Activator signal even if understanding-oriented
-  const hasTheoryGap = answers.blocker === 3 && (tried.includes(0) || tried.includes(1));
+  // Credibility defender: senior + goal is protection-oriented
+  const isCredibilityDefender = answers.seniority >= 2 && orientation === "protector";
 
-  // High-commitment beginner: picks 30+ min per day at AI level 0 or 1
-  const isHighCommitmentBeginner = answers.ai_level <= 1; // time question removed; now means any beginner
+  // Anxiety-driven: urgency is peers advancing + goal is feel confident
+  const isAnxietyDriven = urgencyTrigger === 1 && answers.goal === 4;
 
-  // Credibility defender: concern = credibility erosion + senior
-  const isCredibilityDefender = answers.biggest_concern === 3 && answers.seniority >= 2;
+  const isPureNavigator = orientation === "navigator" && blockerArr.includes(1);
 
   // ══════════════════════════════════════════════════════════
   // PROFILE ASSIGNMENT
-  // Priority: pattern overrides → 3-axis matrix
   // ══════════════════════════════════════════════════════════
   let profileName;
 
   if (readinessLevel === "high") {
-    // Already using AI , question is how they want to go deeper
-    if (isUnderstandingOriented && !isExternallyMotivated) {
-      profileName = "The Cartographer"; // Fluent, wants systems and strategic depth quietly
-    } else if (orientation === "navigator" && !isActionOriented) {
-      profileName = "The Cartographer"; // Navigators at high readiness want frameworks not speed
+    if (isUnderstandingOriented || orientation === "navigator") {
+      profileName = "The Cartographer"; // Fluent, wants systems and strategic depth
     } else {
-      profileName = "The Compounder";  // Fluent, wants to compound, build, and ship
+      profileName = "The Compounder";   // Fluent, wants to compound and ship
     }
 
   } else if (readinessLevel === "medium") {
     if (isCredibilityDefender || (orientation === "protector" && answers.seniority >= 2)) {
-      profileName = "The Incumbent";   // Senior + protecting expertise they've built
+      profileName = "The Incumbent";
     } else if (orientation === "protector") {
-      profileName = "The Incumbent";   // Any protector at medium readiness
+      profileName = "The Incumbent";
     } else if (isPureNavigator || orientation === "navigator") {
-      profileName = "The Navigator";  // Needs the big picture to act or lead
+      profileName = "The Navigator";
     } else if (hasTheoryGap || (isActionOriented && !isUnderstandingOriented)) {
-      profileName = "The Primed";   // Optimizer who needs action, not more reading
+      profileName = "The Primed";
     } else if (isUnderstandingOriented) {
-      profileName = "The Scout";    // Optimizer who needs the map before moving
+      profileName = "The Scout";
     } else {
-      profileName = "The Primed";   // Default medium optimizer
+      profileName = "The Primed";
     }
 
   } else {
     // low readiness
-    if (isFrustrated) {
-      // Tried a lot, still stuck , this is a different problem than "haven't started"
-      profileName = orientation === "protector" ? "The Pivot" : "The Pivot";
-    } else if (isAnxietyDriven || (orientation === "protector" && answers.seniority >= 2)) {
-      profileName = "The Pivot";     // Protector + anxiety = needs credibility not tools
+    if (isAnxietyDriven || (orientation === "protector" && answers.seniority >= 2)) {
+      profileName = "The Pivot";
     } else if (isHighCommitmentBeginner && isActionOriented) {
-      profileName = "The Launchpad";     // Motivated, just needs the first move
+      profileName = "The Launchpad";
     } else if (isUnderstandingOriented && orientation !== "protector") {
-      profileName = "The Skeptic";  // Hasn't started , needs context before moving
+      profileName = "The Skeptic";
     } else if (orientation === "protector") {
-      profileName = "The Pivot";     // Protector at low readiness = nothing felt relevant
+      profileName = "The Pivot";
     } else {
-      profileName = "The Launchpad";     // Gap feels huge, willing to move with a nudge
+      profileName = "The Launchpad";
     }
   }
 
@@ -755,21 +715,21 @@ function classifyProfile(answers) {
     "know your career is protected",
     "open doors that aren't open to you yet",
     "have real options you don't have right now",
-    "feel confident again , not faking it, actually solid",
-    "have the clarity to make better calls for the people you lead",
+    "feel confident again — not faking it, actually solid",
+    "find a direction worth committing to",
+    "get real clarity on what comes next",
   ];
   const ultimateWhy = ultimateWhyFromGoal[answers.goal] || "";
 
   let behavioralStyle;
-  if      (isOutcomeOriented && isExternallyMotivated) behavioralStyle = "visible-doer";
-  else if (isOutcomeOriented && isInternallyMotivated) behavioralStyle = "quiet-doer";
-  else if (isProcessOriented && isExternallyMotivated) behavioralStyle = "visible-thinker";
-  else if (isProcessOriented && isInternallyMotivated) behavioralStyle = "quiet-thinker";
+  if      (isOutcomeOriented && isExternallyMotivated)  behavioralStyle = "visible-doer";
+  else if (isOutcomeOriented && isInternallyMotivated)  behavioralStyle = "quiet-doer";
+  else if (isProcessOriented && isExternallyMotivated)  behavioralStyle = "visible-thinker";
+  else if (isProcessOriented && isInternallyMotivated)  behavioralStyle = "quiet-thinker";
   else behavioralStyle = "balanced";
 
   const readinessChip = readinessLevel === "high"   ? "High readiness"
-    : readinessLevel === "medium" ? "Medium readiness"
-    : "Early stage";
+    : readinessLevel === "medium" ? "Medium readiness" : "Early stage";
 
   const styleChips = {
     "visible-doer":    "Act first, share the output",
@@ -789,7 +749,6 @@ function classifyProfile(answers) {
     isExternallyMotivated, isInternallyMotivated,
     isFrustrated, isAnxietyDriven, isPureNavigator, hasTheoryGap,
     isHighCommitmentBeginner, isCredibilityDefender,
-    // career situation signals (Change 1)
     careerSituation, urgencyTrigger,
     isInTransition, isStagnating, isHighPerformerFear, isBuildingToward,
     isUrgencyLayoff, isUrgencyPromotion, isUrgencyDrift,
@@ -798,15 +757,16 @@ function classifyProfile(answers) {
 }
 
 // ════════════════════════════════════════════════════════════
-// QUESTIONS , 12 total, reordered for psychological arc
+// QUESTIONS , 7 total
 // (Change #1: removed daily_want, format; already_tried restored)
 // (Change #2: reordered , sliders at 5 and 8 for peak engagement)
 // (Change #3: fear reframed as agency)
+// (Change #4: ai_level removed — readiness derived from other signals)
 // Arc: Facts → Identity → Emotions → Commitment
 // ════════════════════════════════════════════════════════════
 const questions = [
   {
-    id: "name", label: "1 of 12",
+    id: "name", label: "1 of 7",
     text: "What's your first name?",
     sub: "Just your first name is fine.",
     type: "text",
@@ -814,7 +774,7 @@ const questions = [
   },
   // ── BLOCK 1: Facts ──
   {
-    id: "role", label: "2 of 12",
+    id: "role", label: "2 of 7",
     text: "What best describes your current role?",
     sub: "This shapes which changes are coming for your work, and which you can safely ignore.",
     type: "dropdown",
@@ -850,63 +810,21 @@ const questions = [
     ],
   },
   {
-    id: "seniority", label: "3 of 12",
+    id: "seniority", label: "3 of 7",
     text: "Which of these best describes where you are right now?",
-    sub: "Not how long you've been working — where you actually sit.",
+    sub: "Not how long you've been working, where you actually sit.",
     type: "single",
     options: [
-      { text: "Early career — building the foundations", sub: "Still developing core skills and figuring out the landscape" },
-      { text: "Established — capable and growing", sub: "Solid contributor, starting to develop a point of view" },
-      { text: "Senior — domain expert, leading or influencing others", sub: "Known for what you do, responsible for more than just your own output" },
-      { text: "Leadership — running a team or function", sub: "Accountable for people, outcomes, and direction" },
-      { text: "Executive — setting direction, not just executing", sub: "Strategic decisions, org-level accountability" },
+      { text: "Early career, building the foundations", sub: "Still developing core skills and figuring out the landscape" },
+      { text: "Established, capable and growing", sub: "Solid contributor, starting to develop a point of view" },
+      { text: "Senior, domain expert, leading or influencing others", sub: "Known for what you do, responsible for more than just your own output" },
+      { text: "Leadership, running a team or function", sub: "Accountable for people, outcomes, and direction" },
+      { text: "Executive, setting direction, not just executing", sub: "Strategic decisions, org-level accountability" },
     ],
   },
   {
-    id: "learn_style", label: "4 of 12",
-    text: "How do you learn best?",
-    sub: "Select all that apply. Your daily tasks will lean toward these formats.",
-    type: "multi",
-    options: [
-      { text: "Reading articles or reports" },
-      { text: "Hands-on — doing the thing, not reading about it" },
-      { text: "Short summaries and key takeaways, no fluff" },
-      { text: "Real examples from my specific industry" },
-      { text: "Frameworks and mental models, or reflecting on what I've seen" },
-      { text: "Watching or listening to something explained" },
-    ],
-  },
-  {
-    id: "time_available", label: "5 of 12",
-    text: "How much time can you realistically give this each day?",
-    sub: "Be honest. A small task you do beats a big one you skip.",
-    type: "single",
-    options: [
-      { text: "5 minutes", sub: "Very tight — I need the absolute minimum that still moves things" },
-      { text: "10 minutes", sub: "One focused block — enough to do something real" },
-      { text: "15–20 minutes", sub: "A bit more — I can go slightly deeper when it matters" },
-      { text: "30+ minutes", sub: "I can carve out real time when the task deserves it" },
-    ],
-  },
-  // ── BLOCK 1b: Career situation + urgency trigger ──
-  {
-    id: "career_situation", label: "6 of 12",
-    text: "Where are you in your career right now?",
-    sub: "Be honest. This shapes every task we give you more than anything else.",
-    type: "single",
-    options: [
-      { text: "Doing well, but anxious about what's coming", sub: "Good position  - the ground is starting to shift" },
-      { text: "Stuck  - same role, similar pay, for too long", sub: "More than ready to be further along" },
-      { text: "Actively looking for something different", sub: "Ready to move, not sure which direction" },
-      { text: "Recently displaced or navigating a transition", sub: "The decision was made for me" },
-      { text: "Successful, but quietly worried about being left behind", sub: "High performer, increasing unease" },
-      { text: "Doing well  - and want to move faster", sub: "No crisis. Just know there's a next level and want to reach it." },
-      { text: "Navigating AI disruption in my field", sub: "The role is changing. You need to know what that means for you." },
-    ],
-  },
-  {
-    id: "urgency", label: "7 of 12",
-    text: "What's making this feel urgent right now?",
+    id: "urgency", label: "4 of 7",
+    text: "What are you looking to change right now?",
     sub: "Pick the one that's truest, not the one that sounds most reasonable.",
     type: "single",
     options: [
@@ -915,12 +833,14 @@ const questions = [
       { text: "The decision was partly made for me. A layoff or restructure changed things." },
       { text: "There's a review or a promotion on the line. I need to show something real." },
       { text: "Nothing is broken exactly. I've just been drifting, and I want to stop before it gets harder." },
-      { text: "All of the above, if I'm being honest." },
+      { text: "I'm not unhappy with where I am — I'm unhappy with the field itself. I want out.", sub: "A real change, not just a better version of the same thing" },
+      { text: "I'm keen on exploring new opportunities." },
+      { text: "None of the above, if I'm being honest." },
     ],
   },
   // ── BLOCK 3: Identity (slider #1 , forced honest take) ──
   {
-    id: "style_outcome_process", label: "8 of 12",
+    id: "style_outcome_process", label: "5 of 7",
     text: "When it comes to making progress on this, which is more true?",
     sub: "Pick the side you lean toward. There's no middle ground.",
     type: "slider",
@@ -929,7 +849,7 @@ const questions = [
   },
   // ── BLOCK 4: Emotions ──
   {
-    id: "goal", label: "9 of 12",
+    id: "goal", label: "6 of 7",
     text: "What would feel like real progress in the next 12 months?",
     sub: "Be specific. This shapes every week of your program.",
     type: "single",
@@ -941,42 +861,18 @@ const questions = [
       { text: "Feel genuinely solid and confident in my job or career" },
     ],
   },
-  // ── BLOCK 5: Identity (slider #2 , validation driver) ──
-  {
-    id: "style_external_internal", label: "10 of 12",
-    text: "What would actually make you feel like you're on top of this?",
-    sub: "Drag toward the statement that's more honest, not more admirable.",
-    type: "slider",
-    left: { text: "Other people can see I'm ahead", desc: "My colleagues, my boss, my team. They'd know I get it." },
-    right: { text: "I know I'm ahead, even if no one notices", desc: "The confidence is internal. I don't need to perform it." },
-  },
   // ── BLOCK 6: Constraints ──
   {
-    id: "blocker", label: "11 of 12",
+    id: "blocker", label: "7 of 7",
     text: "What usually gets in the way when you try to make progress on something that matters?",
-    sub: "This shapes how we frame your daily tasks.",
-    type: "single",
+    sub: "Choose everything that applies.",
+    type: "multi",
     options: [
       { text: "Not enough time", sub: "Days are full, hard to carve out space" },
       { text: "Too much information, don't know where to start", sub: "Overwhelm and paralysis" },
       { text: "I start but don't follow through", sub: "Motivation drops off after a few days" },
       { text: "I learn things but don't apply them to actual work", sub: "Theory without practice" },
       { text: "I don't know which direction to move. Too many options, or none that feel right.", sub: "Direction paralysis" },
-    ],
-  },
-  {
-    id: "already_tried", label: "12 of 12",
-    text: "What have you already tried?",
-    sub: "Select all that apply. Everything you've tried brought you here. We won't repeat it.",
-    type: "multi",
-    options: [
-      { text: "Reading articles, books, or career content" },
-      { text: "Watching YouTube or taking online courses" },
-      { text: "Attending a conference or workshop" },
-      { text: "Trying tools or new approaches on my own" },
-      { text: "Talking to colleagues, a mentor, or a coach" },
-      { text: "Working with a recruiter or career advisor" },
-      { text: "Nothing yet. This is where it starts." },
     ],
   },
 ];
@@ -1028,15 +924,11 @@ function generateNarrative(answers, classification) {
 
   const roleName     = QOpt("role", answers.role)             || "your field";
   const seniorityText = QOpt("seniority", answers.seniority)  || "";
-  const tried        = answers.already_tried || [];
-  const triedNothing = tried.includes(5);
-  const triedCount   = tried.filter(x => x !== 5).length;
-  const learnStyle   = answers.learn_style   || [];
-  const valuable     = answers.what_feels_valuable || [];
-  const aiLevel      = answers.ai_level ?? 1;
-  const aiLevelText  = ["never used AI tools", "tried a few things", "an occasional user", "using AI daily"][aiLevel] || "exploring AI";
+  // Normalise blocker to array (question is now multi-select)
+  const blockerArr = normalizeBlocker(answers.blocker);
+  const primaryBlocker = blockerArr[0] ?? -1;
 
-  // ── BEAT 1: Recognition  - leads with career situation when available, then ai_level + pattern flags ──
+  // ── BEAT 1: Recognition  - leads with career situation when available, then readiness + pattern flags ──
   // career_situation options: 0=anxious/doing-well, 1=stuck, 2=looking, 3=displaced, 4=successful-worried, 5=building
   // urgency options: 0=AI field change, 1=peers advancing, 2=layoff, 3=review/promo, 4=drifting, 5=all
   const careerSituationText = [
@@ -1053,6 +945,7 @@ function generateNarrative(answers, classification) {
     "a layoff or restructure forced the question",
     "a review or promotion is on the line",
     "you've been drifting and you want to stop",
+    "you've realised it's not your role that's the problem — it's the field",
     "it's everything at once",
   ];
   const careerOpener = careerSituation >= 0 ? careerSituationText[careerSituation] : null;
@@ -1076,35 +969,30 @@ function generateNarrative(answers, classification) {
   } else if (isCredibilityDefender && readinessLevel !== "high") {
     recognition = `You're ${seniorityText.toLowerCase()} into ${roleName.toLowerCase()} , which means you've built something real. AI is changing parts of your field, and the question isn't whether to engage. It's how to do it without undermining what you've already built.`;
   } else if (readinessLevel === "high") {
-    if (aiLevel === 3)
-      recognition = `You're ${seniorityText.toLowerCase()} into ${roleName.toLowerCase()} and using AI every day , that puts you in a small minority of people in your field who've moved from experimenting to actual practice.`;
-    else
-      recognition = `You're ${seniorityText.toLowerCase()} into ${roleName.toLowerCase()} and already using AI regularly , that puts you ahead of most people in your field.`;
+    recognition = `You're ${seniorityText.toLowerCase()} into ${roleName.toLowerCase()} and further along than most people in your field. Your plan builds on that advantage.`;
   } else if (readinessLevel === "medium") {
-    if (aiLevel === 2)
-      recognition = `You're ${seniorityText.toLowerCase()} into ${roleName.toLowerCase()}. You use AI occasionally , enough to have seen it work, not enough for it to feel like a consistent part of how you operate.`;
-    else
-      recognition = `You're ${seniorityText.toLowerCase()} into ${roleName.toLowerCase()}. You've tried some things with AI , enough to know it matters, not enough for it to feel like yours yet.`;
+    recognition = `You're ${seniorityText.toLowerCase()} into ${roleName.toLowerCase()}. You've got the experience and the awareness. The gap is between knowing it matters and having a system that makes it stick.`;
   } else {
     if (isHighCommitmentBeginner)
-      recognition = `You're ${seniorityText.toLowerCase()} into ${roleName.toLowerCase()} and haven't really started with AI yet , but you're willing to put in real time. That combination moves fast once it has direction.`;
+      recognition = `You're ${seniorityText.toLowerCase()} into ${roleName.toLowerCase()} and ready to move , you just haven't had the right starting point. That combination moves fast once it has direction.`;
     else
-      recognition = `You're ${seniorityText.toLowerCase()} into ${roleName.toLowerCase()} and haven't really started with AI yet. That's honest , and it's a smaller gap to close than you think.`;
+      recognition = `You're ${seniorityText.toLowerCase()} into ${roleName.toLowerCase()}. The gap between where you are and where you need to be is smaller than it feels. Your plan starts where you actually are.`;
   }
 
-  // ── BEAT 2: Concern reframe , unchanged, already specific ──
-  let concern = "";
-  if      (answers.biggest_concern === 0) concern = "You told us the most useful thing right now would be resolving the feeling that colleagues see you as behind. That's a social pressure, not a skills gap , and it responds faster to visible action than to quiet learning.";
-  else if (answers.biggest_concern === 1) concern = "You said the most useful thing would be knowing which parts of your role are actually at risk. That's the right question , and the exposure analysis below gives you a specific answer.";
-  else if (answers.biggest_concern === 2) concern = "You want to understand the tools everyone else seems to be using. That's a solvable problem , and it's faster to solve than you think. Most of the tools that matter can be learned in a single focused session.";
-  else if (answers.biggest_concern === 3) concern = "You want to protect the credibility you've spent years building. The way to protect it is being the person in your field who understands where AI augments expertise and where it doesn't.";
-  else if (answers.biggest_concern === 4) concern = "You said younger people are pulling ahead. Here's what the research shows: they're faster at adopting tools, but they don't have your judgment, your network, or your context. The combination of your experience and basic AI fluency is worth more than either alone.";
-  else if (answers.biggest_concern === 5) concern = "You said the hardest part is not knowing what you don't know. That's the most honest answer , and the one that responds best to a structured system. Your plan closes that gap one step at a time.";
+  // ── BEAT 2: Concern reframe — now multi-select aware ──
+  const blockerConcerns = {
+    0: "Time is the constraint. Every task in your plan is scoped to 30 minutes or less.",
+    1: "Overwhelm is the problem. Your plan is sequential for exactly this reason — one thing at a time, in order.",
+    2: "You start things but lose the thread. That's a structure problem, not a motivation problem. Every task has a clear endpoint.",
+    3: "You learn things but don't apply them to your actual work. So your plan is built around application, not consumption.",
+    4: "Too many options, none that feel right. Your plan cuts through that — one direction, one move at a time.",
+  };
+  let concern = blockerArr.length > 0 ? blockerConcerns[primaryBlocker] || "" : "";
 
   // ── BEAT 3: Goal , modulated by orientation + pattern ──
   let goal = "";
   if (answers.goal_custom?.trim()) {
-    goal = `Your goal — "${answers.goal_custom.trim()}" — is what every task in this plan is working toward.`;
+    goal = `Your goal, "${answers.goal_custom.trim()}", is what every task in this plan is working toward.`;
   } else if (isPureNavigator) {
     goal = "Your goal is clarity for others: understanding what's changing well enough to make better calls for your team. Your plan is weighted toward frameworks and evidence.";
   } else if (hasTheoryGap && answers.goal !== 5) {
@@ -1115,52 +1003,21 @@ function generateNarrative(answers, classification) {
   else if (answers.goal === 3) goal = "You're building a skill set that opens doors. Your plan puts you in motion toward that.";
   else if (answers.goal === 4) goal = "More than anything, you want to feel genuinely solid  - not performing it, actually having it. Every task is a data point that builds the real thing.";
 
-  // ── BEAT 4: Blocker + already tried + learn_style ──
-  let blocker = "";
-  if      (answers.blocker === 0) blocker = `Time is the real constraint. Every task in your plan fits inside 10 minutes. If you only do one thing, do the first one.`;
-  else if (answers.blocker === 1) blocker = "You said the problem is overwhelm , too much information, no clear starting point. Your plan is sequential for exactly this reason. One thing at a time, in order. We do the filtering so you don't have to.";
-  else if (answers.blocker === 2) blocker = "You told us you start things but lose the thread. That's a structure problem, not a motivation problem. Every task below has a clear endpoint , you'll know when you're done.";
-  else if (answers.blocker === 3) blocker = "You said you learn things but don't apply them to your actual work. So your plan is built around application, not consumption. Everything asks you to do something real.";
-  else if (answers.blocker === 4) blocker = "You said the hardest part is knowing what's worth learning. That's exactly what this plan resolves. Every task is here for a specific reason , nothing generic, nothing filler.";
+  // ── BEAT 4: Blocker narrative — composite for multi-select ──
+  const blockerLines = {
+    0: "Time is the real constraint. Every task in your plan fits inside 30 minutes.",
+    1: "Overwhelm is one of your blockers — too much, no clear starting point. Your plan is sequential for exactly this reason. We do the filtering so you don't have to.",
+    2: "You start things but lose the thread. That's a structure problem, not a motivation problem. Every task has a clear endpoint — you'll know when you're done.",
+    3: "You learn things but don't apply them to your actual work. So your plan is built around application, not consumption. Everything asks you to do something real.",
+    4: "Direction is one of your blockers. Every task is here for a specific reason — nothing generic, nothing filler.",
+  };
+  let blocker = blockerArr.length > 0
+    ? blockerArr.map(b => blockerLines[b]).filter(Boolean).join(" ")
+    : "";
 
-  // Append learn_style specificity
-  if (learnStyle.includes(1) && !learnStyle.includes(4)) {
-    blocker += " Your tasks lean hands-on , trying things, not reading about them.";
-  } else if (learnStyle.includes(4) && !learnStyle.includes(1)) {
-    blocker += " Your tasks lean toward frameworks and mental models , understanding why before how.";
-  } else if (learnStyle.includes(5)) {
-    blocker += " Your tasks include reflection prompts , space to notice what's actually shifting as you go.";
-  } else if (learnStyle.includes(2)) {
-    blocker += " Each task comes with a clear 'why this matters' , no filler, no fluff.";
-  } else if (learnStyle.includes(3)) {
-    blocker += " Your tasks draw from real examples in your specific field, not generic AI case studies.";
-  }
 
-  // Append already_tried specific context , name what they've tried, not just how many
-  if (isFrustrated) {
-    const triedNames = [];
-    if (tried.includes(0)) triedNames.push("newsletters");
-    if (tried.includes(1)) triedNames.push("courses and videos");
-    if (tried.includes(2)) triedNames.push("conferences");
-    if (tried.includes(3)) triedNames.push("the tools directly");
-    if (tried.includes(4)) triedNames.push("conversations with mentors");
-    const triedStr = triedNames.length > 1
-      ? triedNames.slice(0,-1).join(", ") + " and " + triedNames[triedNames.length-1]
-      : triedNames[0] || "multiple approaches";
-    blocker += ` You've tried ${triedStr} and nothing fully landed. Your plan is different , it starts with your actual work, not a generic starting point.`;
-  } else if (triedNothing) {
-    blocker += " You haven't tried anything yet , that's fine. Your plan starts from zero with no assumptions.";
-  } else if (tried.includes(3) && tried.includes(1)) {
-    blocker += " You've used the tools and done the courses , which means you're past the basics. Your plan assumes that.";
-  } else if (tried.includes(3)) {
-    blocker += " You've actually used the tools already , your plan picks up from there, not from scratch.";
-  } else if (tried.includes(4)) {
-    blocker += " You've talked to people about this. Your plan gives you something concrete to bring back to those conversations.";
-  } else if (tried.includes(1)) {
-    blocker += " You've done the courses , your plan shifts from consuming to applying.";
-  } else if (triedCount > 0) {
-    blocker += " We've accounted for what you've already tried.";
-  }
+
+
 
   // ── BEAT 5: Style , approachStyle + behavioral style + what_feels_valuable ──
   let style = "";
@@ -1181,26 +1038,13 @@ function generateNarrative(answers, classification) {
     else style = "Your plan moves fast enough to stay current, deliberately enough to make it stick.";
   }
 
-  // what_feels_valuable , wire all 6 indices, not just 3/4/5
-  if (valuable.includes(5) && orientation === "navigator") {
-    style += " Understanding AI well enough to make decisions is the through-line.";
-  } else if (valuable.includes(3)) {
-    style += " It's an action sequence, not a reading list.";
-  } else if (valuable.includes(4)) {
-    style += " Your tasks are built from real examples, not theory.";
-  } else if (valuable.includes(0)) {
-    style += " Every tool mentioned is there for a specific reason.";
-  } else if (valuable.includes(1)) {
-    style += " Each task builds on the last.";
-  } else if (valuable.includes(2)) {
-    style += " Your plan tells you what's shifting, not just what to do.";
-  }
+
 
   // ── BEAT 6: Anchor ──
   let anchor = "";
   if (ultimateWhy) anchor = `Underneath it all , you want to ${ultimateWhy}. Everything below is in service of that.`;
 
-  return { recognition, concern, goal, blocker, style, anchor, ultimateWhy: ultimateWhy || "", aiLevelText };
+  return { recognition, concern, goal, blocker, style, anchor, ultimateWhy: ultimateWhy || "" };
 }
 
 // ─── Profile Reason , explains WHY this profile was assigned ──────
@@ -1219,11 +1063,10 @@ function buildProfileReason(profileName, classification, answers) {
     isUrgencyLayoff, isUrgencyPromotion, isUrgencyDrift,
   } = classification;
 
-  const ai    = answers.ai_level   ?? 1;
   const sen   = answers.seniority  ?? 0;
-  const concern = answers.biggest_concern;
+  const _blockerArr2 = normalizeBlocker(answers.blocker);
+  const concern = _blockerArr2[0] ?? -1;
   const goal    = answers.goal;
-  const tried   = (answers.already_tried || []).filter(x => x !== 5);
 
   // Career situation opener  - prepended to reason text
   const situationLine =
@@ -1321,8 +1164,6 @@ function buildProfileReason(profileName, classification, answers) {
   } else if (profileName === "The Primed") {
     if (hasTheoryGap) {
       reason = `Medium readiness with a clear pattern: you've been consuming content, but your blocker is that learning doesn't turn into practice. You know enough. Your plan is a system that converts knowledge into action, one real task at a time.`;
-    } else if (isFrustrated) {
-      reason = `Medium readiness and a frustration pattern. You've tried approaches and nothing has fully clicked. The fix isn't more content. Your plan is built around structure and specificity, not generic starting points.`;
     } else {
       reason = `Medium readiness and action-oriented. You've been engaging with what's changing. Your plan turns that engagement into a repeatable practice.`;
     }
@@ -1359,9 +1200,7 @@ function buildProfileReason(profileName, classification, answers) {
     reason = `Low readiness and understanding-oriented. You haven't started yet, but it's not avoidance. You build a clear picture before you act. Your plan honours that: context and frameworks before action.`;
 
   } else if (profileName === "The Pivot") {
-    if (isFrustrated) {
-      reason = `You've tried ${tried.length} different ${tried.length === 1 ? "approach" : "approaches"} and still haven't found traction. That's a different problem than not having started. Your plan starts with your specific work tasks, not a generic entry point.`;
-    } else if (isAnxietyDriven) {
+    if (isAnxietyDriven) {
       reason = `Two answers combined: concern about others moving faster, and a goal of feeling confident rather than hitting an outcome. Your plan works through evidence and specificity. It asks you to look at one real thing and decide for yourself.`;
     } else if (isCredibilityDefender && readinessLevel === "low") {
       reason = `Low readiness and a credibility-protection signal at ${sen >= 3 ? "veteran" : "senior"} level. Nothing has felt specific enough to your situation to be worth acting on. Your plan starts with evidence from your specific work, not general content.`;
@@ -1391,64 +1230,66 @@ function generateSignalInsights(classification, answers) {
   } = classification;
 
   const goal    = answers.goal             ?? -1;
-  const concern = answers.biggest_concern  ?? -1;
-  const blocker = answers.blocker          ?? -1;
+  const _blockerArr3 = normalizeBlocker(answers.blocker);
+  const concern = _blockerArr3[0] ?? -1; // primary blocker index
+  const blocker = concern;
 
-  // Build the insight — 2 lines about who this archetype is for this specific person
+  // Build the insight, 2 lines about who this archetype is for this specific person
   // Crosses: archetype × career situation × urgency × goal
-  const careerSit = answers.career_situation ?? -1;
+  const careerSit = -1; // career_situation removed
   const urgency   = answers.urgency          ?? -1;
   const profile   = classification.profileName || "";
 
-  // Urgency flavour — what's actually driving this
+  // Urgency flavour, what's actually driving this
   const urgencyLine =
     urgency === 0 ? "the field is moving and you need to know where you stand" :
     urgency === 1 ? "people around you are advancing and you're not moving" :
     urgency === 2 ? "a layoff or restructure made the decision for you" :
     urgency === 3 ? "there's a review or promotion on the line" :
     urgency === 4 ? "you've been drifting and you want to stop" :
-    urgency === 5 ? "everything is happening at once" : null;
+    urgency === 5 ? "you've decided it's not the role — it's the field itself" :
+    urgency === 6 ? "everything is happening at once" : null;
 
-  // Goal flavour — what they actually want
+  // Goal flavour, what they actually want
   const goalLine =
-    answers.goal_custom?.trim()    ? `your goal — ${answers.goal_custom.trim()}` :
+    answers.goal_custom?.trim()    ? `your goal, ${answers.goal_custom.trim()}` :
     goal === 0 ? "landing a role that's actually a level up" :
     goal === 1 ? "moving to a company that fits where you want to go" :
     goal === 2 ? "making a real pivot into new work" :
     goal === 3 ? "building the skills that keep you relevant as AI reshapes the work" :
-    goal === 4 ? "feeling genuinely solid and confident — not performing it, actually there" : "moving forward";
+    goal === 4 ? "feeling genuinely solid and confident, not performing it, actually there" : "moving forward";
 
   let text = "";
 
   if (profile === "The Compounder") {
-    text = urgencyLine ? `The Compounder is already in motion — ${urgencyLine} is fuel, not friction.` : `The Compounder is already in motion and needs to make sure it's adding up, not spreading thin.`;
+    text = urgencyLine ? `The Compounder is already in motion, ${urgencyLine} is fuel, not friction.` : `The Compounder is already in motion and needs to make sure it's adding up, not spreading thin.`;
 
   } else if (profile === "The Cartographer") {
-    text = goalLine ? `The Cartographer builds the picture before moving — for you, ${goalLine} requires a mental model that holds, not a list of things to try.` : `The Cartographer builds the picture before making a move, and needs the framework before acting with confidence.`;
+    text = goalLine ? `The Cartographer builds the picture before moving, for you, ${goalLine} requires a mental model that holds, not a list of things to try.` : `The Cartographer builds the picture before making a move, and needs the framework before acting with confidence.`;
 
   } else if (profile === "The Primed") {
-    text = urgencyLine ? `The Primed has the awareness and the intent — with ${urgencyLine}, the move now is structure, not more reading.` : `The Primed has the awareness and the intent — what's been missing is a structure that actually converts that into daily practice.`;
+    text = urgencyLine ? `The Primed has the awareness and the intent, with ${urgencyLine}, the move now is structure, not more reading.` : `The Primed has the awareness and the intent, what's been missing is a structure that actually converts that into daily practice.`;
 
   } else if (profile === "The Scout") {
-    text = goalLine ? `The Scout needs enough of the map before committing to ${goalLine} — and your program builds exactly that.` : `The Scout needs to understand the landscape before committing to a direction, and that instinct is worth following.`;
+    text = goalLine ? `The Scout needs enough of the map before committing to ${goalLine}, and your program builds exactly that.` : `The Scout needs to understand the landscape before committing to a direction, and that instinct is worth following.`;
 
   } else if (profile === "The Incumbent") {
-    text = urgencyLine ? `The Incumbent has invested years into expertise that matters — ${urgencyLine} makes it specific, not vague.` : `The Incumbent has invested years into real expertise — the question now is which parts are protected and which need reinforcing.`;
+    text = urgencyLine ? `The Incumbent has invested years into expertise that matters, ${urgencyLine} makes it specific, not vague.` : `The Incumbent has invested years into real expertise, the question now is which parts are protected and which need reinforcing.`;
 
   } else if (profile === "The Navigator") {
-    text = goalLine ? `The Navigator thinks before moving — ${goalLine} requires clarity that holds under pressure, and that's what this builds.` : `The Navigator thinks before moving, and needs a picture solid enough to make calls that actually hold.`;
+    text = goalLine ? `The Navigator thinks before moving, ${goalLine} requires clarity that holds under pressure, and that's what this builds.` : `The Navigator thinks before moving, and needs a picture solid enough to make calls that actually hold.`;
 
   } else if (profile === "The Launchpad") {
-    text = urgencyLine ? `The Launchpad is earlier than most — ${urgencyLine} is the right reason to move now, and the program gives you a real first step.` : `The Launchpad is earlier than most, which is the best position to be in — the whole ground is still open.`;
+    text = urgencyLine ? `The Launchpad is earlier than most, ${urgencyLine} is the right reason to move now, and the program gives you a real first step.` : `The Launchpad is earlier than most, which is the best position to be in, the whole ground is still open.`;
 
   } else if (profile === "The Skeptic") {
-    text = goalLine ? `The Skeptic doesn't move until the evidence is solid — your program earns that trust one specific thing at a time, toward ${goalLine}.` : `The Skeptic doesn't move until the evidence is solid enough to trust, and that standard is exactly what makes the progress durable.`;
+    text = goalLine ? `The Skeptic doesn't move until the evidence is solid, your program earns that trust one specific thing at a time, toward ${goalLine}.` : `The Skeptic doesn't move until the evidence is solid enough to trust, and that standard is exactly what makes the progress durable.`;
 
   } else if (profile === "The Pivot") {
-    text = urgencyLine ? `The Pivot is navigating a transition — with ${urgencyLine} as the backdrop, the program asks for one real thing per day until the ground feels solid.` : `The Pivot is navigating a transition, and the program meets you where you actually are, not where you were.`;
+    text = urgencyLine ? `The Pivot is navigating a transition, with ${urgencyLine} as the backdrop, the program asks for one real thing per day until the ground feels solid.` : `The Pivot is navigating a transition, and the program meets you where you actually are, not where you were.`;
 
   } else {
-    text = `This program is built specifically for your situation — not a generic version of career development.`;
+    text = `This program is built specifically for your situation, not a generic version of career development.`;
   }
 
   return [{ icon: "→", text }];
@@ -1467,7 +1308,7 @@ function generateAnchorThought(profileName, answers, classification) {
   if (isAnxietyDriven) return "The gap between where you are and where you need to be has a specific size. Specific is always smaller than vague.";
   if (isHighPerformerFear) return "You're not behind. You're pattern-matching. Trust that  - and then do one thing about it today.";
   if (isBuildingToward) return "You're not behind. You're ambitious. The plan turns that into daily movement.";
-  if (isFrustrated) return "The approaches that didn't work weren't built for your situation. This one is. That's the only difference that matters today.";
+
   if (isCredibilityDefender) return "What you've built over years doesn't disappear. The question is how to make it visible in a field that's changing around it.";
   if (goal === 4) return "Confidence isn't a feeling you wait for. It's a record you build  - one task, one day at a time.";
   if (goal === 1) return "The goal isn't to become something different. It's to make what you already are harder to displace.";
@@ -1482,11 +1323,11 @@ function generateStaticOutcomes(profileName, answers, classification) {
   const { orientation, readinessLevel, isInTransition, isStagnating } = classification || {};
 
   const outputByGoal = [
-    "You have something concrete that demonstrates you're ready for the next level — visible, attributable, pointed at.",
+    "You have something concrete that demonstrates you're ready for the next level, visible, attributable, pointed at.",
     "You have a clear picture of what the right companies look like and what makes you competitive for them.",
     "You've completed one real piece of work in the direction you're pivoting toward.",
     "You've built or practiced one skill that closes the gap between where you are and where AI can't reach.",
-    "You have five completed days as evidence — proof to yourself, not just intent.",
+    "You have five completed days as evidence, proof to yourself, not just intent.",
   ];
 
   const clarityByProfile = {
@@ -1523,22 +1364,20 @@ function generateStaticOutcomes(profileName, answers, classification) {
   ];
 }
 
-// ─── Plan Generator , tasks now modulated by ai_level + seniority ──
+// ─── Plan Generator , tasks modulated by readiness + seniority ──
 function generatePlan(answers, auditTasks) {
   const role = QOpt("role", answers.role) || "professional";
   const classification = classifyProfile(answers);
   const profileName = classification.profileName;
   const profileData = buildProfile(profileName, role, answers.seniority, answers, classification);
-  const aiLevelLabels = ["complete beginner", "early explorer", "occasional user", "daily practitioner"];
-  const aiLevel = aiLevelLabels[answers.ai_level] ?? "early explorer";
-  const timeMap = ["5 min", "15 min", "30 min", "60 min"];
-  const timeSlot = "15 min"; // fixed; time question removed
+  const timeSlot = "30 min"; // default, time question removed
 
   const seniorityText = QOpt("seniority", answers.seniority) || "";
   const goalText = QOpt("goal", answers.goal) || "";
-  const concernText = QOpt("biggest_concern", answers.biggest_concern) || "";
+  const _blockerArrPlan = normalizeBlocker(answers.blocker);
+  const concernText = _blockerArrPlan.map(b => QOpt("blocker", b)).filter(Boolean).join("; ") || "";
   const narrative = generateNarrative(answers, classification);
-  const isExperienced = answers.ai_level >= 2;
+  const isExperienced = classification.readinessLevel === "high";
   const isSenior = answers.seniority >= 2;
 
   const taskAnalysis = (auditTasks || []).map((task) => {
@@ -1550,7 +1389,7 @@ function generatePlan(answers, auditTasks) {
   const leastExposed = taskAnalysis.length > 0 ? taskAnalysis.reduce((a, b) => a.score < b.score ? a : b) : null;
 
   // ─── Role × Level task matrix ─────────────────────────
-  // Each role has beginner (ai_level 0-1) and experienced (ai_level 2-3) task sets.
+  // Each role has beginner (low/medium readiness) and experienced (high readiness) task sets.
   // Seniority further modulates descriptions via isSenior flag.
   const taskMatrix = {
     // SOFTWARE
@@ -1749,7 +1588,7 @@ function generatePlan(answers, auditTasks) {
   if (mostExposed && mostExposed.score >= 55) {
     const exposedTask = mostExposed.task;
     const customTask = {
-      tag: isExperienced ? "Apply" : "Tool",
+      tag: isExperienced ? "Apply" : "Apply",
       time: timeSlot,
       title: isExperienced
         ? `Build an AI workflow for "${exposedTask}"`
@@ -1766,14 +1605,14 @@ function generatePlan(answers, auditTasks) {
 
   // Profile + behavioral style task reordering
   const emphasis = profileData.taskEmphasis;
-  if (emphasis === "apply") { const a = tasks.filter(t => t.tag === "Tool" || t.tag === "Apply"); const r = tasks.filter(t => t.tag !== "Tool" && t.tag !== "Apply"); tasks = [...a, ...r].slice(0, 3); }
+  if (emphasis === "apply") { const a = tasks.filter(t => t.tag === "Apply"); const r = tasks.filter(t => t.tag !== "Apply"); tasks = [...a, ...r].slice(0, 3); }
   else if (emphasis === "read") { const a = tasks.filter(t => t.tag === "Read" || t.tag === "Reflect"); const r = tasks.filter(t => t.tag !== "Read" && t.tag !== "Reflect"); tasks = [...a, ...r].slice(0, 3); }
   else if (emphasis === "reflect") { const a = tasks.filter(t => t.tag === "Reflect"); const r = tasks.filter(t => t.tag !== "Reflect"); tasks = [...a, ...r].slice(0, 3); }
-  if (classification.isOutcomeOriented && answers.ai_level > 0) { const d = tasks.find(t => t.tag === "Tool" || t.tag === "Apply"); if (d && tasks[0] !== d) tasks = [d, ...tasks.filter(t => t !== d)].slice(0, 3); }
+  if (classification.isOutcomeOriented && isExperienced) { const d = tasks.find(t => t.tag === "Apply"); if (d && tasks[0] !== d) tasks = [d, ...tasks.filter(t => t !== d)].slice(0, 3); }
   if (classification.isProcessOriented) { const th = tasks.find(t => t.tag === "Read" || t.tag === "Reflect"); if (th && tasks[0] !== th) tasks = [th, ...tasks.filter(t => t !== th)].slice(0, 3); }
-  if (answers.blocker === 1) tasks.sort((a, b) => (parseInt(a.time) || 15) - (parseInt(b.time) || 15));
-  // Safety: don't lead with Tool for complete beginners
-  if (answers.ai_level === 0 && tasks[0]?.tag === "Tool") { const g = tasks.find(t => t.tag === "Read" || t.tag === "Reflect"); if (g) tasks = [g, ...tasks.filter(t => t !== g)].slice(0, 3); }
+  if (_blockerArrPlan.includes(1)) tasks.sort((a, b) => (parseInt(a.time) || 15) - (parseInt(b.time) || 15));
+  // Safety: don't lead with Tool for low-readiness users
+  if (classification.readinessLevel === "low" && tasks[0]?.tag === "Apply") { const g = tasks.find(t => t.tag === "Read" || t.tag === "Reflect"); if (g) tasks = [g, ...tasks.filter(t => t !== g)].slice(0, 3); }
   // But DO keep audit-driven custom task #1 in position if it exists
   if (mostExposed && mostExposed.score >= 55 && tasks[0]?.title?.includes(mostExposed.task) === false) {
     const custom = tasks.find(t => t.title?.includes(mostExposed.task));
@@ -1793,10 +1632,9 @@ function generatePlan(answers, auditTasks) {
   const personalizedTasks = tasks.map((task, i) => {
     let why = task.whyBase;
     if (i === 0) {
-      if (answers.biggest_concern === 0) why = `You want to stop feeling behind. This is the kind of thing that changes that , visible, concrete, ahead of peers. ${why}`;
-      else if (answers.biggest_concern === 1) why = `You want to know which parts of your role are at risk. This task gives you that clarity. ${why}`;
-      else if (answers.biggest_concern === 3) why = `You want to protect your credibility. This builds it. ${why}`;
-      else if (answers.biggest_concern === 5) why = `You want to close the blind spots. This closes one. ${why}`;
+      if (_blockerArrPlan.includes(1)) why = `Overwhelm is one of your main obstacles. This task cuts through that. ${why}`;
+      else if (_blockerArrPlan.includes(2)) why = `You've had trouble following through before. This task has a clear finish line. ${why}`;
+      else if (_blockerArrPlan.includes(3)) why = `You learn things but don't apply them. This task is pure application. ${why}`;
       if (ultimateWhy) why += ` You want to ${ultimateWhy}. This is the first step.`;
     }
     if (i === 1) {
@@ -1807,7 +1645,7 @@ function generatePlan(answers, auditTasks) {
   });
 
   // careerSituationLabel  - crosses situation + urgency for a specific, personal read
-  const cs  = answers.career_situation ?? -1;
+  const cs  = -1; // career_situation removed
   const urg = answers.urgency           ?? -1;
   const careerSituationLabel = (() => {
     if (cs === 0) { // Doing well, anxious
@@ -1849,7 +1687,7 @@ function generatePlan(answers, auditTasks) {
     name: (answers.name || "").trim(),
     headline, tasks: personalizedTasks, roleName: role,
     profileName, profileData, classification,
-    aiLevel, seniority: seniorityText, goal: goalText,
+    seniority: seniorityText, goal: goalText,
     primaryConcern: concernText, narrative,
     taskAnalysis, avgExposure, mostExposed, leastExposed,
     profileReason: buildProfileReason(profileName, classification, answers),
@@ -1862,7 +1700,7 @@ function generatePlan(answers, auditTasks) {
 }
 
 
-// ─── Sub-role questions — triggered by specific role selections ───────────────
+// ─── Sub-role questions, triggered by specific role selections ───────────────
 const SUB_ROLE_QUESTIONS = {
   11: { // Legal / compliance
     text: "Which best describes your work?",
@@ -1994,7 +1832,7 @@ const SUB_ROLE_QUESTIONS = {
   },
   4: { // Data / analytics / BI
     text: "Which best describes your work?",
-    sub: "Data roles have diverged significantly — this shapes your specific tasks.",
+    sub: "Data roles have diverged significantly, this shapes your specific tasks.",
     options: [
       { text: "Data analyst", sub: "Business intelligence, reporting, dashboards, Excel/SQL" },
       { text: "Data scientist", sub: "Modelling, statistical analysis, Python/R, experimentation" },
@@ -2125,7 +1963,7 @@ const SUB_ROLE_QUESTIONS = {
 };
 
 
-// ─── Goal detail sub-questions — per goal index ──────────────────────────────
+// ─── Goal detail sub-questions, per goal index ──────────────────────────────
 const GOAL_DETAIL_QUESTIONS = {
   2: { // "Get somewhere better"
     id: "goal_detail",
@@ -2138,7 +1976,7 @@ const GOAL_DETAIL_QUESTIONS = {
       { text: "A move into a completely different field or industry" },
       { text: "Starting something of my own" },
       { text: "A step back to a more sustainable pace" },
-      { text: "I need clarity first — I don't know yet" },
+      { text: "I need clarity first, I don't know yet" },
     ],
   },
   3: { // "Build a skill set that opens doors"
@@ -2152,11 +1990,11 @@ const GOAL_DETAIL_QUESTIONS = {
       { text: "Skills in a new domain or industry" },
       { text: "Communication, influence, or executive presence" },
       { text: "Strategic or commercial thinking" },
-      { text: "I'm not sure yet — I need to figure that out" },
+      { text: "I'm not sure yet, I need to figure that out" },
     ],
   },
 };
-// Goal direction follow-up — triggered when goal_detail is "career change" or "own venture"
+// Goal direction follow-up, triggered when goal_detail is "career change" or "own venture"
 const GOAL_DIRECTION_QUESTION = {
   id: "goal_direction",
   text: "Where are you thinking of moving toward?",
@@ -2174,9 +2012,6 @@ const NEEDS_DIRECTION = {
   3: [2],     // "build skills" → "skills in a new domain"
 };
 
-// Backward compat — keep GOAL_DETAIL_QUESTION pointing to goal 2 for any existing refs
-const GOAL_DETAIL_QUESTION = GOAL_DETAIL_QUESTIONS[2];
-
 
 // Which role indices trigger a sub-role question
 const ROLES_WITH_SUBROLE = new Set(Object.keys(SUB_ROLE_QUESTIONS).map(Number));
@@ -2185,18 +2020,16 @@ const ROLES_WITH_SUBROLE = new Set(Object.keys(SUB_ROLE_QUESTIONS).map(Number));
 
 // ─── Google Fonts ──────────────────────────────────────────
 // Georgia (editorial display) + Inter (clean UI sans)
-const FONTS = `
-  @import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@300;400;500;600;700&display=swap');
-`;
+const FONTS = ``; // Font loaded via <link> in root component
 
 // ─── Design Tokens ────────────────────────────────────────
 const C = {
   // Dark backgrounds
-  bg0:      "#08080F",   // deepest — hero base
+  bg0:      "#08080F",   // deepest, hero base
   bg1:      "#0F0F1C",   // hero gradient mid
   bg2:      "#13131F",   // hero gradient end
 
-  // Accent — refined warm lavender
+  // Accent, refined warm lavender
   accent:   "#9B8FE0",
   accentL:  "#B8AFEC",
   accentLL: "#EAE8FA",
@@ -2221,7 +2054,7 @@ const C = {
 };
 
 // ─── Logo SVG (arc + glow dot) ────────────────────────────
-function Logo({ size = 28 }) {
+const Logo = React.memo(function Logo({ size = 28 }) {
   return (
     <svg width={size} height={size * 0.65} viewBox="0 0 56 36" fill="none" xmlns="http://www.w3.org/2000/svg">
       <defs>
@@ -2248,10 +2081,10 @@ function Logo({ size = 28 }) {
       <circle cx="28" cy="26" r="2.5" fill="#C4BDF7" />
     </svg>
   );
-}
+});
 
 // ─── FadeIn helper ─────────────────────────────────────────
-function FadeIn({ children, delay = 0, up = true }) {
+const FadeIn = React.memo(function FadeIn({ children, delay = 0, up = true }) {
   const ref = useRef(null);
   const [visible, setVisible] = useState(false);
   useEffect(() => {
@@ -2273,10 +2106,10 @@ function FadeIn({ children, delay = 0, up = true }) {
       {children}
     </div>
   );
-}
+});
 
 // ─── Pill badge ────────────────────────────────────────────
-function Pill({ children, light = false }) {
+const Pill = React.memo(function Pill({ children, light = false }) {
   return (
     <span style={{
       display: "inline-flex", alignItems: "center", gap: 6,
@@ -2290,7 +2123,7 @@ function Pill({ children, light = false }) {
       {children}
     </span>
   );
-}
+});
 
 // ─── Section label ─────────────────────────────────────────
 function Label({ children, light = false }) {
@@ -2309,6 +2142,25 @@ function Label({ children, light = false }) {
 // ─── Divider ───────────────────────────────────────────────
 function Divider({ light = false }) {
   return <div style={{ width: "100%", height: 1, background: light ? C.border : C.borderD, margin: "0" }} />;
+}
+
+// SVG wave shape between two section colours — no gradient, flat fills only
+function SectionBlend({ from, to, height = 60, flip = false, deep = false }) {
+  // deep=true: taller wave with a more gradual curve, for high-contrast transitions
+  const wavePath = deep
+    ? "M0,20 C200,120 800,0 1200,60 L1200,120 L0,120 Z"
+    : "M0,32 C300,60 900,10 1200,38 L1200,60 L0,60 Z";
+  const viewH = deep ? 120 : 60;
+  return (
+    <div style={{ display: "block", lineHeight: 0, marginTop: -1, marginBottom: -1, overflow: "hidden" }}>
+      <svg viewBox={`0 0 1200 ${viewH}`} preserveAspectRatio="none"
+        style={{ display: "block", width: "100%", height: deep ? (height || 120) : height, transform: flip ? "scaleX(-1)" : "none" }}
+        aria-hidden="true">
+        <rect x="0" y="0" width="1200" height={viewH} fill={from} />
+        <path d={wavePath} fill={to} />
+      </svg>
+    </div>
+  );
 }
 
 // ─── Headline Typewriter ───────────────────────────────────
@@ -2365,7 +2217,7 @@ function HeadlineTypewriter() {
         </span>
       </div>
 
-      {/* Line 2 — typewriter */}
+      {/* Line 2, typewriter */}
       <div style={{ minHeight: "1.2em" }}>
         <span style={{
           fontFamily: "Georgia, 'Times New Roman', serif",
@@ -2475,9 +2327,13 @@ function LandingPage({ onStart, onResume, savedPlan }) {
           .sa-hero-cta { flex-direction: column !important; align-items: stretch !important; }
           .sa-hero-cta .sa-btn-primary, .sa-hero-cta .sa-btn-ghost { width: 100%; justify-content: center; }
           .sa-steps-grid { grid-template-columns: 1fr !important; }
+          .sa-steps-grid .sa-step-card { display: flex; flex-direction: column; align-items: center; text-align: center; }
+          .sa-steps-grid .sa-step-card h3 { text-align: center; }
           .sa-quotes-grid { grid-template-columns: 1fr !important; }
           .sa-stats-row { flex-direction: column !important; gap: 24px !important; align-items: flex-start !important; }
           .sa-footer-inner { flex-direction: column !important; gap: 16px !important; align-items: flex-start !important; }
+          .sa-dashboard-frame { text-align: left !important; }
+          .sa-dashboard-frame p { text-align: left !important; }
         }
       `}</style>
 
@@ -2502,9 +2358,6 @@ function LandingPage({ onStart, onResume, savedPlan }) {
                 Resume program
               </button>
             )}
-            <button onClick={onStart} className="sa-btn-primary" style={{ fontSize: 13, padding: "9px 18px" }}>
-              Get my plan →
-            </button>
           </div>
         </div>
       </nav>
@@ -2523,7 +2376,6 @@ function LandingPage({ onStart, onResume, savedPlan }) {
 
         <div style={{ maxWidth: 760, margin: "0 auto", textAlign: "center", position: "relative", zIndex: 1 }}>
 
-
           {/* Headline halo */}
           <div style={{
             position: "absolute", top: "50%", left: "50%",
@@ -2536,7 +2388,21 @@ function LandingPage({ onStart, onResume, savedPlan }) {
           }} />
 
           {/* Headline */}
-          <HeadlineTypewriter />
+          <FadeIn delay={80}>
+            <h1 style={{
+              fontFamily: "Georgia, 'Times New Roman', serif",
+              fontSize: "clamp(32px, 5.5vw, 60px)",
+              fontWeight: 400,
+              lineHeight: 1.12,
+              color: C.textHero,
+              letterSpacing: "-0.5px",
+              margin: "0 0 36px",
+              position: "relative",
+              zIndex: 1,
+            }}>
+              Get <span style={{ color: C.accentL, fontStyle: "italic" }}>unstuck</span> in your career
+            </h1>
+          </FadeIn>
 
           {/* Subhead */}
           <FadeIn delay={160}>
@@ -2549,7 +2415,7 @@ function LandingPage({ onStart, onResume, savedPlan }) {
               margin: "0 auto 52px",
               fontWeight: 300,
             }}>
-              Second Act challenges your thinking and turns your ideas into a plan you can follow, one day at a time.
+              Second Act is your thinking partner: it helps you get moving, nudges you when you hesitate, and turns your ideas into a plan you can follow, one day at a time.
             </p>
           </FadeIn>
 
@@ -2568,10 +2434,10 @@ function LandingPage({ onStart, onResume, savedPlan }) {
                 <div style={{ flex: 1, textAlign: "left" }}>
                   <p style={{ fontFamily: "Inter", fontSize: 11, fontWeight: 600, letterSpacing: "0.1em", textTransform: "uppercase", color: "rgba(255,255,255,0.35)", marginBottom: 3 }}>Your program is waiting</p>
                   <p style={{ fontFamily: "Inter", fontSize: 15, fontWeight: 600, color: "#fff", marginBottom: 2 }}>
-                    {savedPlan._answers?.name ? `${savedPlan._answers.name} · ` : ""}{savedPlan.profileName}
+                    {savedPlan._answers?.name ? savedPlan._answers.name : "Your program"}
                   </p>
                   <p style={{ fontFamily: "Inter", fontSize: 12, color: "rgba(255,255,255,0.4)" }}>
-                    {savedPlan._resumeDay > 1 ? `Day ${savedPlan._resumeDay} · ` : ""}8-week program
+                    {savedPlan._resumeDay > 1 ? `Day ${savedPlan._resumeDay} · ` : ""}Career program
                   </p>
                 </div>
               </div>
@@ -2588,22 +2454,6 @@ function LandingPage({ onStart, onResume, savedPlan }) {
               {savedPlan && (
                 <button onClick={onStart} className="sa-btn-ghost">Start fresh instead</button>
               )}
-            </div>
-          </FadeIn>
-
-          {/* Stats strip */}
-          <FadeIn delay={360}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 32, marginTop: 72, flexWrap: "wrap" }}>
-              {[
-                { n: "8 weeks", label: "Structured program" },
-                { n: "1 task", label: "Per day, every day" },
-                { n: "12 types", label: "Of career profiles" },
-              ].map(({ n, label }, i) => (
-                <div key={i} style={{ textAlign: "center" }}>
-                  <p style={{ fontFamily: "Georgia, 'Times New Roman', serif", fontSize: 28, fontWeight: 400, color: C.textHero, lineHeight: 1, marginBottom: 4 }}>{n}</p>
-                  <p style={{ fontFamily: "Inter", fontSize: 12, color: "rgba(255,255,255,0.35)", fontWeight: 400 }}>{label}</p>
-                </div>
-              ))}
             </div>
           </FadeIn>
 
@@ -2627,66 +2477,122 @@ function LandingPage({ onStart, onResume, savedPlan }) {
           <FadeIn delay={180}>
             <div style={{ borderLeft: `3px solid ${C.accentD}`, paddingLeft: 22, marginTop: 16 }}>
               <p style={{ fontFamily: "Inter", fontSize: 15, color: C.body, margin: 0, lineHeight: 1.85, fontWeight: 400 }}>
-                Second Act helps you figure out where you stand, what to focus on, and how to move forward, step by step.
+                Second Act provides you with a research-backed structure that helps you figure out where you stand, what to focus on, and how to move forward, step by step.
               </p>
             </div>
           </FadeIn>
         </div>
       </section>
 
-      <Divider light />
-
-      {/* ── HOW IT WORKS ────────────────────────────────────── */}
-      <section style={{ background: C.white, padding: "96px clamp(16px,5vw,40px) 96px" }}>
-        <div style={{ maxWidth: 1000, margin: "0 auto" }}>
+      {/* ── COMPARISON ──────────────────────────────────────── */}
+      <section id="why-second-act" style={{ background: C.white, padding: "96px clamp(16px,5vw,40px) 96px" }}>
+        <div style={{ maxWidth: 860, margin: "0 auto" }}>
           <FadeIn>
             <div style={{ textAlign: "center", marginBottom: 56 }}>
-              <Label light>How it works</Label>
-              <h2 style={{ fontFamily: "Georgia, 'Times New Roman', serif", fontSize: "clamp(28px, 4vw, 42px)", fontWeight: 400, color: C.ink, letterSpacing: "-0.5px", lineHeight: 1.2 }}>
-                Three steps to a plan that actually works
+              <Label light>Why Second Act</Label>
+              <h2 style={{ fontFamily: "Georgia, 'Times New Roman', serif", fontSize: "clamp(26px, 4vw, 38px)", fontWeight: 400, color: C.ink, letterSpacing: "-0.5px", lineHeight: 1.2 }}>
+                A smart complement to traditional coaching
               </h2>
             </div>
           </FadeIn>
 
-          <div className="sa-steps-grid" style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 20 }}>
-            {[
-              {
-                num: "01",
-                title: "Answer 12 questions",
-                body: "Tell us where you are, where you want to go, and how you work best. This is intentional as every answer shapes your plan.",
-                color: "#EAE8FA",
-                textColor: C.accentD,
-              },
-              {
-                num: "02",
-                title: "Get your career profile",
-                body: "We build a full picture of who you are professionally right now: your archetype, your gap, your most important next move.",
-                color: "#E8F0FA",
-                textColor: "#2D5F9A",
-              },
-              {
-                num: "03",
-                title: "One task. Every morning.",
-                body: "Enjoy 56 days of personalized tasks tailored to your role, goal, and working style. Each one takes under 30 minutes and actually moves the needle.",
-                color: "#E8FAF1",
-                textColor: "#1A7A6E",
-              },
-            ].map(({ num, title, body, color, textColor }, i) => (
-              <FadeIn key={i} delay={i * 80}>
-                <div className="sa-step-card">
-                  <div style={{ width: 40, height: 40, borderRadius: 10, background: color, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 20 }}>
-                    <span style={{ fontFamily: "Inter", fontSize: 13, fontWeight: 700, color: textColor }}>{num}</span>
-                  </div>
-                  <h3 style={{ fontFamily: "Georgia, 'Times New Roman', serif", fontSize: 22, fontWeight: 400, color: C.ink, marginBottom: 12, lineHeight: 1.2 }}>{title}</h3>
-                  <p style={{ fontFamily: "Inter", fontSize: 14, color: C.body, lineHeight: 1.75, fontWeight: 300 }}>{body}</p>
+          <FadeIn delay={80}>
+            <div className="sa-comparison-scroll" style={{ WebkitOverflowScrolling: "touch" }}>
+            <div style={{ borderRadius: 20, overflow: "hidden", boxShadow: "0 8px 48px rgba(15,14,30,0.10), 0 2px 12px rgba(15,14,30,0.05)", minWidth: 620 }}>
+
+              {/* Column headers */}
+              <div style={{ display: "grid", gridTemplateColumns: "180px 1fr 1fr" }}>
+                {/* Empty corner */}
+                <div style={{ background: "#F7F6FB", borderBottom: `1px solid ${C.border}`, borderRight: `1px solid ${C.border}` }} />
+                {/* Coaching header */}
+                <div style={{ padding: "24px 32px", background: "#F7F6FB", borderBottom: `1px solid ${C.border}`, borderRight: `1px solid ${C.border}` }}>
+                  <p style={{ fontFamily: "Inter", fontSize: 10, fontWeight: 700, letterSpacing: "0.14em", textTransform: "uppercase", color: C.muted, margin: "0 0 6px" }}>Traditional</p>
+                  <p style={{ fontFamily: "Georgia, 'Times New Roman', serif", fontSize: 20, fontWeight: 400, color: C.body, margin: 0, letterSpacing: "-0.3px" }}>Coaching</p>
                 </div>
-              </FadeIn>
-            ))}
-          </div>
+                {/* Second Act header */}
+                <div style={{ padding: "24px 32px", background: C.accentD, position: "relative", overflow: "hidden" }}>
+                  <div style={{ position: "absolute", top: "-30%", right: "-10%", width: 120, height: 120, borderRadius: "50%", background: "rgba(255,255,255,0.06)", pointerEvents: "none" }} />
+                  <p style={{ fontFamily: "Inter", fontSize: 10, fontWeight: 700, letterSpacing: "0.14em", textTransform: "uppercase", color: "rgba(255,255,255,0.45)", margin: "0 0 6px" }}>Your complement</p>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <Logo size={16} />
+                    <p style={{ fontFamily: "Georgia, 'Times New Roman', serif", fontSize: 20, fontWeight: 400, color: "#fff", margin: 0, letterSpacing: "-0.3px" }}>Second Act</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Rows */}
+              {[
+                { label: "Cost",             coaching: "$200–$500 / session",                  secondact: "Free to start"                            },
+                { label: "Availability",     coaching: "Weekly 1-hour sessions",               secondact: "Every day, at your pace"                  },
+                { label: "Personalization",  coaching: "Depends on your coach",                secondact: "Proven frameworks, tailored to you"       },
+                { label: "Accountability",   coaching: "Between sessions, you're on your own", secondact: "Structured program keeps you on track"    },
+                { label: "Time to clarity",  coaching: "Weeks of exploration",                 secondact: "A clear plan in minutes"                  },
+                { label: "Thinking partner", coaching: "Your coach",          secondact: "Nora, available every day, remembers your context"              },
+                { label: "Habit formation",  coaching: "Not structured for it",                secondact: "Nora keeps you on track, research-backed, behaviorally designed"  },
+              ].map(({ label, coaching, secondact }, i) => {
+                const isLast = i === 6;
+                return (
+                  <div key={i} style={{ display: "grid", gridTemplateColumns: "180px 1fr 1fr" }}>
+
+                    {/* Label cell */}
+                    <div style={{
+                      padding: "20px 24px 20px 28px",
+                      background: C.white,
+                      borderBottom: isLast ? "none" : `1px solid ${C.border}`,
+                      borderRight: `1px solid ${C.border}`,
+                      display: "flex", alignItems: "center",
+                    }}>
+                      <p style={{ fontFamily: "Inter", fontSize: 11, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: C.ink, margin: 0 }}>{label}</p>
+                    </div>
+
+                    {/* Coaching cell */}
+                    <div style={{
+                      padding: "20px 32px",
+                      background: C.white,
+                      borderBottom: isLast ? "none" : `1px solid ${C.border}`,
+                      borderRight: `1px solid ${C.border}`,
+                      display: "flex", alignItems: "center", gap: 12,
+                    }}>
+                      <span style={{
+                        width: 20, height: 20, borderRadius: "50%", flexShrink: 0,
+                        background: "#F3F2F7", border: `1.5px solid ${C.border}`,
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                      }}>
+                        <svg width="8" height="8" viewBox="0 0 8 8" fill="none">
+                          <path d="M2 2l4 4M6 2l-4 4" stroke={C.muted} strokeWidth="1.5" strokeLinecap="round"/>
+                        </svg>
+                      </span>
+                      <p style={{ fontFamily: "Inter", fontSize: 13, color: C.muted, fontWeight: 400, margin: 0, lineHeight: 1.5 }}>{coaching}</p>
+                    </div>
+
+                    {/* Second Act cell */}
+                    <div style={{
+                      padding: "20px 32px",
+                      background: "rgba(108,96,194,0.05)",
+                      borderBottom: isLast ? "none" : `1px solid rgba(184,175,236,0.4)`,
+                      display: "flex", alignItems: "center", gap: 12,
+                    }}>
+                      <span style={{
+                        width: 20, height: 20, borderRadius: "50%", flexShrink: 0,
+                        background: C.accentD,
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                        boxShadow: "0 2px 8px rgba(108,96,194,0.35)",
+                      }}>
+                        <svg width="9" height="7" viewBox="0 0 9 7" fill="none">
+                          <path d="M1 3.5l2.5 2.5 4.5-5" stroke="#fff" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
+                        </svg>
+                      </span>
+                      <p style={{ fontFamily: "Inter", fontSize: 13, color: C.ink, fontWeight: 500, margin: 0, lineHeight: 1.5 }}>{secondact}</p>
+                    </div>
+
+                  </div>
+                );
+              })}
+            </div>
+            </div>
+          </FadeIn>
         </div>
       </section>
-
-      <Divider light />
 
       {/* ── PRODUCT PREVIEW ─────────────────────────────────── */}
       <section style={{ background: C.offWhite, padding: "96px clamp(16px,5vw,40px) 96px" }}>
@@ -2695,17 +2601,17 @@ function LandingPage({ onStart, onResume, savedPlan }) {
             <div style={{ textAlign: "center", marginBottom: 48 }}>
               <Label light>The daily experience</Label>
               <h2 style={{ fontFamily: "Georgia, 'Times New Roman', serif", fontSize: "clamp(28px, 4vw, 42px)", fontWeight: 400, color: C.ink, letterSpacing: "-0.5px", lineHeight: 1.2 }}>
-                One task a day. Eight weeks.
+                One task a day. Weekly goals.
               </h2>
               <p style={{ fontFamily: "Inter", fontSize: 15, color: C.body, lineHeight: 1.8, fontWeight: 300, maxWidth: 480, margin: "16px auto 0" }}>
-                It takes at least 8 weeks to form a new habit, and most people fall off before they get there. Second Act helps you stay consistent, accountable, and moving forward until it sticks.
+                One task a day built around your role, goal, and working style. And Nora as your thinking partner to adapt your plan and keep you on track.
               </p>
             </div>
           </FadeIn>
 
           {/* App frame */}
           <FadeIn delay={80}>
-            <div style={{ borderRadius: 16, overflow: "hidden", boxShadow: "0 32px 80px rgba(15,14,30,0.14), 0 4px 16px rgba(15,14,30,0.06)", border: `1px solid ${C.border}` }}>
+            <div className="sa-dashboard-frame" style={{ borderRadius: 16, overflow: "hidden", boxShadow: "0 32px 80px rgba(15,14,30,0.14), 0 4px 16px rgba(15,14,30,0.06)", border: `1px solid ${C.border}` }}>
               {/* Browser chrome */}
               <div style={{ background: "#F2F1F7", padding: "11px 16px", display: "flex", alignItems: "center", gap: 8, borderBottom: `1px solid ${C.border}` }}>
                 <div style={{ display: "flex", gap: 6 }}>
@@ -2777,115 +2683,6 @@ function LandingPage({ onStart, onResume, savedPlan }) {
         </div>
       </section>
 
-      <Divider light />
-
-      {/* ── COMPARISON ──────────────────────────────────────── */}
-      <section style={{ background: C.white, padding: "96px clamp(16px,5vw,40px) 96px" }}>
-        <div style={{ maxWidth: 860, margin: "0 auto" }}>
-          <FadeIn>
-            <div style={{ textAlign: "center", marginBottom: 56 }}>
-              <Label light>Why Second Act</Label>
-              <h2 style={{ fontFamily: "Georgia, 'Times New Roman', serif", fontSize: "clamp(26px, 4vw, 38px)", fontWeight: 400, color: C.ink, letterSpacing: "-0.5px", lineHeight: 1.2 }}>
-                A smarter alternative to traditional coaching
-              </h2>
-            </div>
-          </FadeIn>
-
-          <FadeIn delay={80}>
-            <div style={{ borderRadius: 20, overflow: "hidden", boxShadow: "0 8px 48px rgba(15,14,30,0.10), 0 2px 12px rgba(15,14,30,0.05)" }}>
-
-              {/* Column headers */}
-              <div style={{ display: "grid", gridTemplateColumns: "180px 1fr 1fr" }}>
-                {/* Empty corner */}
-                <div style={{ background: "#F7F6FB", borderBottom: `1px solid ${C.border}`, borderRight: `1px solid ${C.border}` }} />
-                {/* Coaching header */}
-                <div style={{ padding: "24px 32px", background: "#F7F6FB", borderBottom: `1px solid ${C.border}`, borderRight: `1px solid ${C.border}` }}>
-                  <p style={{ fontFamily: "Inter", fontSize: 10, fontWeight: 700, letterSpacing: "0.14em", textTransform: "uppercase", color: C.muted, margin: "0 0 6px" }}>Traditional</p>
-                  <p style={{ fontFamily: "Georgia, 'Times New Roman', serif", fontSize: 20, fontWeight: 400, color: C.body, margin: 0, letterSpacing: "-0.3px" }}>Coaching</p>
-                </div>
-                {/* Second Act header */}
-                <div style={{ padding: "24px 32px", background: C.accentD, position: "relative", overflow: "hidden" }}>
-                  <div style={{ position: "absolute", top: "-30%", right: "-10%", width: 120, height: 120, borderRadius: "50%", background: "rgba(255,255,255,0.06)", pointerEvents: "none" }} />
-                  <p style={{ fontFamily: "Inter", fontSize: 10, fontWeight: 700, letterSpacing: "0.14em", textTransform: "uppercase", color: "rgba(255,255,255,0.45)", margin: "0 0 6px" }}>Your alternative</p>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <Logo size={16} />
-                    <p style={{ fontFamily: "Georgia, 'Times New Roman', serif", fontSize: 20, fontWeight: 400, color: "#fff", margin: 0, letterSpacing: "-0.3px" }}>Second Act</p>
-                  </div>
-                </div>
-              </div>
-
-              {/* Rows */}
-              {[
-                { label: "Cost",             coaching: "$200–$500 / session",                  secondact: "Free to start"                            },
-                { label: "Availability",     coaching: "Weekly 1-hour sessions",               secondact: "Every day, at your pace"                  },
-                { label: "Personalization",  coaching: "Depends on your coach",                secondact: "Proven frameworks, tailored to you"       },
-                { label: "Accountability",   coaching: "Between sessions, you're on your own", secondact: "Structured program keeps you on track"    },
-                { label: "Time to clarity",  coaching: "Weeks of exploration",                 secondact: "A clear plan in minutes"                  },
-                { label: "Habit formation",  coaching: "Not structured for it",                secondact: "Behaviorally designed for lasting change"  },
-              ].map(({ label, coaching, secondact }, i) => {
-                const isLast = i === 5;
-                return (
-                  <div key={i} style={{ display: "grid", gridTemplateColumns: "180px 1fr 1fr" }}>
-
-                    {/* Label cell */}
-                    <div style={{
-                      padding: "20px 24px 20px 28px",
-                      background: C.white,
-                      borderBottom: isLast ? "none" : `1px solid ${C.border}`,
-                      borderRight: `1px solid ${C.border}`,
-                      display: "flex", alignItems: "center",
-                    }}>
-                      <p style={{ fontFamily: "Inter", fontSize: 11, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: C.ink, margin: 0 }}>{label}</p>
-                    </div>
-
-                    {/* Coaching cell */}
-                    <div style={{
-                      padding: "20px 32px",
-                      background: C.white,
-                      borderBottom: isLast ? "none" : `1px solid ${C.border}`,
-                      borderRight: `1px solid ${C.border}`,
-                      display: "flex", alignItems: "center", gap: 12,
-                    }}>
-                      <span style={{
-                        width: 20, height: 20, borderRadius: "50%", flexShrink: 0,
-                        background: "#F3F2F7", border: `1.5px solid ${C.border}`,
-                        display: "flex", alignItems: "center", justifyContent: "center",
-                      }}>
-                        <svg width="8" height="8" viewBox="0 0 8 8" fill="none">
-                          <path d="M2 2l4 4M6 2l-4 4" stroke={C.muted} strokeWidth="1.5" strokeLinecap="round"/>
-                        </svg>
-                      </span>
-                      <p style={{ fontFamily: "Inter", fontSize: 13, color: C.muted, fontWeight: 400, margin: 0, lineHeight: 1.5 }}>{coaching}</p>
-                    </div>
-
-                    {/* Second Act cell */}
-                    <div style={{
-                      padding: "20px 32px",
-                      background: "rgba(108,96,194,0.05)",
-                      borderBottom: isLast ? "none" : `1px solid rgba(184,175,236,0.4)`,
-                      display: "flex", alignItems: "center", gap: 12,
-                    }}>
-                      <span style={{
-                        width: 20, height: 20, borderRadius: "50%", flexShrink: 0,
-                        background: C.accentD,
-                        display: "flex", alignItems: "center", justifyContent: "center",
-                        boxShadow: "0 2px 8px rgba(108,96,194,0.35)",
-                      }}>
-                        <svg width="9" height="7" viewBox="0 0 9 7" fill="none">
-                          <path d="M1 3.5l2.5 2.5 4.5-5" stroke="#fff" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
-                        </svg>
-                      </span>
-                      <p style={{ fontFamily: "Inter", fontSize: 13, color: C.ink, fontWeight: 500, margin: 0, lineHeight: 1.5 }}>{secondact}</p>
-                    </div>
-
-                  </div>
-                );
-              })}
-            </div>
-          </FadeIn>
-        </div>
-      </section>
-
       {/* ── FINAL CTA ───────────────────────────────────────── */}
       <section style={{
         background: `linear-gradient(155deg, ${C.bg0} 0%, ${C.bg1} 55%, ${C.bg2} 100%)`,
@@ -2900,7 +2697,7 @@ function LandingPage({ onStart, onResume, savedPlan }) {
               Get clarity and structure.
             </h2>
             <p style={{ fontFamily: "Inter", fontSize: 15, color: "rgba(255,255,255,0.45)", fontWeight: 300, lineHeight: 1.75, marginBottom: 40, maxWidth: 400, margin: "0 auto 40px" }}>
-              Get a clear, personalized plan based on where you are, and a thinking partner to keep you accountable.
+              Get a clear, personalized plan based on where you are, and Nora as your thinking partner to keep you accountable.
             </p>
             <button onClick={onStart} className="sa-btn-primary" style={{ fontSize: 16, padding: "16px 44px" }}>
               Get my plan →
@@ -2920,7 +2717,7 @@ function LandingPage({ onStart, onResume, savedPlan }) {
             <span style={{ fontFamily: "Inter", fontSize: 14, fontWeight: 700, color: C.ink, letterSpacing: "-0.3px" }}>Second Act</span>
           </div>
           <span style={{ fontFamily: "Inter", fontSize: 12, color: C.muted, fontWeight: 300 }}>
-            AI-powered career acceleration · Free to start
+            Structure · Accountability · Free to start
           </span>
         </div>
       </footer>
@@ -2942,14 +2739,15 @@ function QuizScreen({ onComplete, onBack }) {
   const [showProfileMoment, setShowProfileMoment] = useState(false);
   const [showingGoalDetail, setShowingGoalDetail] = useState(false);
   const [showingGoalDirection, setShowingGoalDirection] = useState(false);
+  const [history, setHistory] = useState([]); // stack of {current, showingSubRole, showingGoalDetail, showingGoalDirection}
 
   const roleIdx = answers.role;
   const hasSubRole = roleIdx !== undefined && ROLES_WITH_SUBROLE.has(roleIdx);
   const subRoleDef = hasSubRole ? SUB_ROLE_QUESTIONS[roleIdx] : null;
 
   // Effective question: either the sub-role or the normal question
-  const currentGoalDetailQ = GOAL_DETAIL_QUESTIONS[answers.goal] || GOAL_DETAIL_QUESTION;
-  const q = showingGoalDirection ? { ...GOAL_DIRECTION_QUESTION, label: "9c of 12" } : showingGoalDetail ? { ...currentGoalDetailQ, label: "9b of 12" } : showingSubRole ? { ...subRoleDef, id: "role_detail", type: "single" } : questions[current];
+  const currentGoalDetailQ = GOAL_DETAIL_QUESTIONS[answers.goal];
+  const q = showingGoalDirection ? { ...GOAL_DIRECTION_QUESTION, label: "6c of 7" } : showingGoalDetail ? { ...currentGoalDetailQ, label: "6b of 7" } : showingSubRole ? { ...subRoleDef, id: "role_detail", type: "single" } : questions[current];
   if (!q) return null;
 
   // Total steps for progress: questions.length + 1 if this role has a sub-role and it hasn't been answered
@@ -2963,8 +2761,6 @@ function QuizScreen({ onComplete, onBack }) {
     if (q.id === "goal") return answers[q.id] !== undefined || !!(answers.goal_custom?.trim());
     return answers[q.id] !== undefined;
   };
-
-  const [history, setHistory] = useState([]); // stack of {current, showingSubRole, showingGoalDetail, showingGoalDirection}
 
   const go = (dir, newRoleIdx) => {
     setFade(false);
@@ -2981,7 +2777,7 @@ function QuizScreen({ onComplete, onBack }) {
         if (showingSubRole) {
           setShowingSubRole(false); setCurrent(2); setFade(true); return;
         }
-        if (current === 8 && !showingGoalDetail && !answers.goal_custom && GOAL_DETAIL_QUESTIONS[answers.goal] && answers.goal_detail === undefined) {
+        if (current === 5 && !showingGoalDetail && !answers.goal_custom && GOAL_DETAIL_QUESTIONS[answers.goal] && answers.goal_detail === undefined) {
           setShowingGoalDetail(true); setFade(true); return;
         }
         if (showingGoalDetail) {
@@ -2994,6 +2790,11 @@ function QuizScreen({ onComplete, onBack }) {
         }
         if (showingGoalDirection) {
           setShowingGoalDirection(false); setCurrent(c => c + 1); setFade(true); return;
+        }
+        // If we're on the last question, complete the quiz instead of advancing
+        if (current >= questions.length - 1) {
+          onComplete(answers);
+          return;
         }
         setCurrent(c => c + 1);
       } else {
@@ -3043,7 +2844,7 @@ function QuizScreen({ onComplete, onBack }) {
           {q.type === "multi" && <p style={{ fontFamily: T.sans, fontSize: 13, color: "#BBB", margin: "0 0 20px" }}>Select all that apply</p>}
           {q.type !== "multi" && <div style={{ marginBottom: 24 }} />}
 
-          {/* TEXT INPUT — for name */}
+          {/* TEXT INPUT, for name */}
           {q.type === "text" && (
             <div>
               <input
@@ -3065,7 +2866,7 @@ function QuizScreen({ onComplete, onBack }) {
             </div>
           )}
 
-          {/* DROPDOWN SELECT — for long lists like professions */}
+          {/* DROPDOWN SELECT, for long lists like professions */}
           {q.type === "dropdown" && (
             <div>
               <div style={{ position: "relative" }}>
@@ -3106,7 +2907,7 @@ function QuizScreen({ onComplete, onBack }) {
           {q.type === "single" && (
             <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
 
-              {/* Custom goal — shown first on goal question */}
+              {/* Custom goal, shown first on goal question */}
               {q.id === "goal" && (
                 <div style={{ marginBottom: 20 }}>
                   <input
@@ -3239,7 +3040,7 @@ function QuizScreen({ onComplete, onBack }) {
             onClick={() => {
               if (!canProceed()) return;
               if (current === questions.length - 1) {
-                // Call onComplete directly and synchronously — answers is current at this render
+                // Call onComplete directly and synchronously, answers is current at this render
                 onComplete(answers);
               } else {
                 go(1);
@@ -3262,6 +3063,71 @@ function QuizScreen({ onComplete, onBack }) {
 }
 
 // ─── Interstitial ─────────────────────────────────────────
+// ─── Personalised Profile Bullets ────────────────────────────────────────────
+// Generates 3-4 character-driven trait bullets from the user's actual answers.
+// Each bullet reads as an observation about who they are, not a feature of their plan.
+function generatePersonalisedBullets(plan) {
+  const answers = plan._answers || {};
+  const bullets = [];
+
+  // ── 1. Seniority + goal in one sentence ──
+  const seniorityTexts = [
+    "early in your career",
+    "established and growing",
+    "senior-level",
+    "in a leadership position",
+    "at executive level",
+  ];
+  const senText = seniorityTexts[answers.seniority] || null;
+  const goalText = answers.goal_custom?.trim()
+    || GOAL_TEXTS[answers.goal]?.charAt(0).toLowerCase() + (GOAL_TEXTS[answers.goal]?.slice(1) || "")
+    || null;
+
+  if (senText && goalText) {
+    bullets.push(`You're ${senText}, and your goal is to ${goalText}.`);
+  } else if (goalText) {
+    bullets.push(`Your goal is to ${goalText}.`);
+  }
+
+  // ── 2. What's driving this ──
+  const urgencySentences = [
+    "AI is compressing your field faster than expected, and you want to know where you stand.",
+    "You've watched peers advance while you've stayed flat, and you're ready to change that.",
+    "A layoff or restructure changed things — you didn't choose this moment, but you're choosing what comes next.",
+    "There's a review or promotion on the line, and you need something real to show for it.",
+    "Nothing is broken exactly, but you've been drifting and want to move with intention.",
+    "It's not the role — it's the field itself. You want a real change in direction.",
+    "You're keen on exploring new opportunities and want a structured way to do it.",
+    "There's no external pressure driving this — you're here because you decided to be.",
+  ];
+  if (answers.urgency !== undefined && urgencySentences[answers.urgency]) {
+    bullets.push(urgencySentences[answers.urgency]);
+  }
+
+  // ── 3. What gets in the way ──
+  const blockerSentences = {
+    0: "Your days are already full — time is the real constraint, not motivation.",
+    1: "There's too much information and not enough clarity on where to start.",
+    2: "You've started things before but lost the thread — follow-through has been the gap.",
+    3: "You learn plenty, but applying it to actual work is where things stall.",
+    4: "Too many possible directions, or none that feel right — you need a filter, not more options.",
+  };
+  const bArr = Array.isArray(answers.blocker) ? answers.blocker : (answers.blocker != null ? [answers.blocker] : []);
+  if (bArr.length === 1 && blockerSentences[bArr[0]]) {
+    bullets.push(blockerSentences[bArr[0]]);
+  } else if (bArr.length > 1) {
+    const parts = bArr.map(i => {
+      const labels = ["not enough time", "too much information", "starting but not following through", "learning without applying", "direction paralysis"];
+      return labels[i];
+    }).filter(Boolean);
+    if (parts.length) {
+      bullets.push(`The things that usually get in your way: ${parts.join(", ")}.`);
+    }
+  }
+
+  return bullets.slice(0, 3);
+}
+
 function ResultsScreen({ plan, onRestart, onDashboard }) {
   const [visible, setVisible] = useState(false);
   const [email, setEmail] = useState("");
@@ -3271,10 +3137,10 @@ function ResultsScreen({ plan, onRestart, onDashboard }) {
   useEffect(() => { setTimeout(() => setVisible(true), 100); }, []);
 
   const tagColors = {
-    "Tool":    { bg: "#E1F5EE", text: "#0F6E56" },
-    "Read":    { bg: "#E6F1FB", text: "#185FA5" },
-    "Apply":   { bg: T.purpleL,  text: T.purpleD },
-    "Reflect": { bg: "#FEF3C7", text: "#92400E" },
+    "Apply":   { bg: "#F0F7F2", text: "#3A6B50", border: "#BDD9C8" },
+    "Reflect": { bg: "#F5EFEB", text: "#7A3D2E", border: "#C9A090" },
+    "Read":    { bg: "#EEF2FB", text: "#3B55A0", border: "#BACAE8" },
+    "Tool":    { bg: "#EDF7F6", text: "#1A6B62", border: "#9ACFC9" },
   };
 
   // Compute a simple exposure score (0–100) from taskAnalysis
@@ -3304,40 +3170,50 @@ function ResultsScreen({ plan, onRestart, onDashboard }) {
 
         {/* ── PROFILE BADGE ── */}
         <div style={{ textAlign: "center", marginBottom: 28 }}>
-          <div style={{ display: "inline-block", width: "100%", maxWidth: 400, padding: "22px 26px", background: T.purpleL, border: `1.5px solid ${T.purpleMid}`, borderRadius: 14, boxShadow: T.shadow }}>
-            <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: 2.5, textTransform: "uppercase", color: T.purple, margin: "0 0 8px" }}>{plan.name ? `${plan.name}, your profile` : "Your profile"}</p>
-            <p style={{ fontFamily: T.serif, fontSize: 26, fontWeight: 400, color: T.black, margin: 0, letterSpacing: -0.3, lineHeight: 1.2 }}>{plan.profileName}</p>
+          <div style={{ display: "inline-block", width: "100%", maxWidth: 400, padding: "26px 26px 22px", background: T.purpleL, border: `1.5px solid ${T.purpleMid}`, borderRadius: 14, boxShadow: T.shadow }}>
+            {plan.name && (
+              <p style={{ fontFamily: T.serif, fontSize: "clamp(26px, 4.5vw, 34px)", fontWeight: 400, color: T.black, margin: "0 0 4px", lineHeight: 1.15, letterSpacing: -0.3 }}>{plan.name.trim()}</p>
+            )}
+            <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: 2.5, textTransform: "uppercase", color: T.purple, margin: 0 }}>your profile</p>
           </div>
         </div>
 
         {/* ── WHY THIS PROGRAM + WEEK ARC ── */}
-        {/* ── INSIGHT CARD — no title, just the short text ── */}
+        {/* ── PERSONALISED TRAITS ── */}
         {(() => {
-          const insights = generateSignalInsights(plan.classification, plan._answers || {});
-          const text = insights[0]?.text;
-          if (!text) return null;
+          const bullets = generatePersonalisedBullets(plan);
+          if (!bullets.length) return null;
           return (
-            <div style={{ background: "#fff", border: `1px solid ${T.border}`, borderLeft: `4px solid ${T.purple}`, borderRadius: 12, padding: "20px 22px", marginBottom: 28, boxShadow: T.shadow }}>
-              <p style={{ fontFamily: T.sans, fontSize: 15, color: T.ink, margin: 0, lineHeight: 1.75 }}>{text}</p>
+            <div style={{ background: "#fff", border: `1px solid ${T.border}`, borderRadius: 14, padding: "22px 24px", marginBottom: 28, boxShadow: T.shadow }}>
+              <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", color: T.purple, margin: "0 0 16px" }}>What your answers tell us</p>
+              <ul style={{ margin: 0, padding: 0, listStyle: "none", display: "flex", flexDirection: "column", gap: 12 }}>
+                {bullets.map((b, i) => (
+                  <li key={i} style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
+                    <span style={{
+                      flexShrink: 0, marginTop: 4,
+                      width: 6, height: 6, borderRadius: "50%",
+                      background: T.purple, display: "inline-block",
+                    }} />
+                    <span style={{ fontFamily: T.sans, fontSize: 15, color: T.ink, lineHeight: 1.7 }}>{b}</span>
+                  </li>
+                ))}
+              </ul>
+              <p style={{ fontFamily: T.sans, fontSize: 13, color: T.muted, margin: "18px 0 0", lineHeight: 1.5, fontStyle: "italic" }}>
+                Your program has been adapted accordingly.
+              </p>
             </div>
           );
         })()}
 
-        {/* ── WHY THIS PROGRAM — goal + week 1/2/3 ── */}
+        {/* ── WHY THIS PROGRAM — API-generated week arc only ── */}
         {(() => {
+          const arc = plan.weekArc || {};
+          // Only show if the API successfully generated all three sentences
+          if (!arc.a1 || !arc.a2 || !arc.a3) return null;
+
           const goalTexts = GOAL_TEXTS;
           const goalText = plan._answers?.goal_custom || goalTexts[plan._answers?.goal];
-          const arc = plan.weekArc || {};
-          const cl = plan.classification || {};
-          const goalIdx = plan._answers?.goal ?? -1;
-          const w1 = arc.a1 || (cl.readinessLevel === "high" ? "You'll have gone deeper on what actually matters — not just stayed busy with the wrong things." : cl.readinessLevel === "medium" ? "You'll have real momentum where right now there's just intention and good timing." : "You'll have built your first real habit — something that exists now where it didn't before.");
-          const w2 = arc.a2 || (cl.orientation === "optimizer" ? "You'll be accelerating what's already working, not starting over from scratch." : cl.orientation === "protector" ? "You'll know exactly which parts of what you've built are protected and which need work." : "You'll have a sharper, more specific picture of what you're actually working toward.");
-          const w3 = arc.a3 || (goalIdx === 2 ? "Your next move will be visible — to you and to the people who need to see it." : goalIdx === 4 ? "You'll have a real confidence record you can point to, not just a feeling you're trying to hold onto." : "You'll have something concrete to show for this — not just progress in theory, actual proof.");
-          const weeks = [
-            { label: "Week 1", text: w1 },
-            { label: "Week 2", text: w2 },
-            { label: "Week 3", text: w3 },
-          ];
+
           return (
             <div style={{ marginBottom: 28, background: "#fff", borderRadius: 14, border: `1px solid ${T.border}`, overflow: "hidden", boxShadow: T.shadow }}>
               <div style={{ padding: "18px 20px", background: T.purpleL, borderBottom: `1px solid ${T.purpleMid}50` }}>
@@ -3345,7 +3221,11 @@ function ResultsScreen({ plan, onRestart, onDashboard }) {
                 {goalText && <p style={{ fontFamily: T.serif, fontSize: 17, color: T.purpleD, margin: 0, lineHeight: 1.5, fontStyle: "italic" }}>{goalText}</p>}
               </div>
               <div style={{ padding: "4px 20px 8px", display: "flex", flexDirection: "column" }}>
-                {weeks.map((w, i) => (
+                {[
+                  { label: "Week 1", text: arc.a1 },
+                  { label: "Week 2", text: arc.a2 },
+                  { label: "Week 3", text: arc.a3 },
+                ].map((w, i) => (
                   <div key={i} style={{ display: "flex", gap: 14, alignItems: "flex-start", padding: "13px 0", borderBottom: i < 2 ? `1px solid ${T.border}` : "none" }}>
                     <div style={{ minWidth: 52, flexShrink: 0 }}>
                       <span style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", color: T.purple, display: "block", paddingTop: 2 }}>{w.label}</span>
@@ -3369,15 +3249,28 @@ function ResultsScreen({ plan, onRestart, onDashboard }) {
                 Built from your profile. Adapts as you go.
               </p>
               <div style={{ display: "flex", borderRadius: 8, overflow: "hidden", maxWidth: 400, margin: "0 auto 10px" }}>
-                <input type="email" placeholder="your@email.com (optional)" value={email} onChange={e => setEmail(e.target.value)}
-                  onKeyDown={e => { if (e.key === "Enter") { setSubmitted(true); setTimeout(() => onDashboard && onDashboard(Date.now()), 400); } }}
+                <input type="email" placeholder="Enter your email to get started" value={email} onChange={e => setEmail(e.target.value)}
+                  onKeyDown={e => { if (e.key === "Enter" && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { setSubmitted(true); setTimeout(() => onDashboard && onDashboard(Date.now()), 400); } }}
                   style={{ flex: 1, padding: "14px 16px", border: "none", fontFamily: T.sans, fontSize: 14, outline: "none", background: "#1E1E2E", color: "#fff", minWidth: 0 }} />
-                <button onClick={() => { setSubmitted(true); setTimeout(() => onDashboard && onDashboard(Date.now()), 400); }}
-                  style={{ background: T.purple, color: "#fff", border: "none", fontFamily: T.sans, fontSize: 14, fontWeight: 600, padding: "14px 20px", cursor: "pointer", whiteSpace: "nowrap", transition: "all 0.2s" }}>
-                  Start Week 1 →
-                </button>
+                {(() => {
+                  const valid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+                  return (
+                    <button
+                      disabled={!valid}
+                      onClick={() => { if (valid) { setSubmitted(true); setTimeout(() => onDashboard && onDashboard(Date.now()), 400); } }}
+                      style={{
+                        background: valid ? T.purple : "rgba(124,111,159,0.25)",
+                        color: valid ? "#fff" : "rgba(255,255,255,0.3)",
+                        border: "none", fontFamily: T.sans, fontSize: 14, fontWeight: 600,
+                        padding: "14px 20px", cursor: valid ? "pointer" : "not-allowed",
+                        whiteSpace: "nowrap", transition: "all 0.2s",
+                      }}>
+                      Start Week 1 →
+                    </button>
+                  );
+                })()}
               </div>
-              <p style={{ fontFamily: T.sans, fontSize: 12, color: "rgba(255,255,255,0.3)", margin: 0 }}>Free · No card required · Email optional</p>
+              <p style={{ fontFamily: T.sans, fontSize: 12, color: "rgba(255,255,255,0.3)", margin: 0 }}>Free · No card required</p>
             </>
           ) : (
             <div style={{ textAlign: "center", padding: "8px 0" }}>
@@ -3415,38 +3308,34 @@ async function generateAITasks(answers, auditTasks, classification, profileData,
     ? SUB_ROLE_QUESTIONS[answers.role].options[answers.role_detail]?.text || ""
     : "";
 
-  const TIME_LABELS = ["5 min", "10 min", "15 min", "20 min"];
-  const timePref = answers.time_available !== undefined ? TIME_LABELS[answers.time_available] || "10 min" : "10 min";
+  const timePref = "30 min"; // default, time question removed
 
   const ctx = {
     name:              answers.name || "",
     role:              get("role", answers.role),
     role_detail:       roleDetailText,
     seniority:         get("seniority", answers.seniority),
-    ai_level:          answers.ai_level ?? 1,
-    time_available:    timePref,
-    goal_detail:       answers.goal_detail !== undefined ? ((GOAL_DETAIL_QUESTIONS[answers.goal] || GOAL_DETAIL_QUESTION)?.options?.[answers.goal_detail]?.text || "") : "",
+    readiness_level:   classification.readinessLevel || "medium",
+    time_available:    "30 min",
+    goal_detail:       answers.goal_detail !== undefined ? ((GOAL_DETAIL_QUESTIONS[answers.goal])?.options?.[answers.goal_detail]?.text || "") : "",
     goal_direction:    (answers.goal_direction || "").trim(),
-    career_situation:  get("career_situation", answers.career_situation),
+    career_situation:  "not specified",
     urgency:           get("urgency", answers.urgency),
-    concern:           answers.biggest_concern !== undefined ? get("biggest_concern", answers.biggest_concern) : get("blocker", answers.blocker),
+    concern:           normalizeBlocker(answers.blocker).map(b => get("blocker", b)).filter(Boolean).join("; ") || "not specified",
     goal:              answers.goal_custom || get("goal", answers.goal),
-    blocker:           get("blocker", answers.blocker),
+    blocker:           normalizeBlocker(answers.blocker).map(b => get("blocker", b)).filter(Boolean).join("; ") || "not specified",
     ultimate_why:      (() => {
       if (answers.goal_custom) return answers.goal_custom;
-      const fromGoal = ["land a role that's actually a level up", "move to a company that fits where they want to go", "make a real pivot into new work", "build the skills that keep them relevant as AI reshapes what the job requires", "feel genuinely solid and confident — not performing it, actually there"];
+      const fromGoal = ["land a role that's actually a level up", "move to a company that fits where they want to go", "make a real pivot into new work", "build the skills that keep them relevant as AI reshapes what the job requires", "feel genuinely solid and confident, not performing it, actually there"];
       return fromGoal[answers.goal] || "";
     })(),
     style:             answers.style_outcome_process < 30 ? "strongly action-oriented , skip context, give me the move"
                      : answers.style_outcome_process < 50 ? "action-leaning , prefers doing over reading"
                      : answers.style_outcome_process > 70 ? "strongly context-oriented , needs to understand before acting"
                      : "context-leaning , wants enough landscape to act with confidence",
-    validation:        answers.style_external_internal < 30 ? "strongly externally motivated , wants peers, boss, team to see progress"
-                     : answers.style_external_internal < 50 ? "externally leaning , visible progress matters"
-                     : answers.style_external_internal > 70 ? "strongly internally motivated , building for personal confidence, not optics"
-                     : "internally leaning , quiet competence over performance",
-    learn_style:       getMulti("learn_style").join(", ") || "not specified",
-    already_tried:     getMulti("already_tried").join(", ") || "nothing yet",
+    validation:        "not specified",
+    learn_style:       "not specified",
+    already_tried:     "nothing yet",
     audit_tasks:       (auditTasks || []).filter(t => t && t.trim().length > 3),
   };
 
@@ -3491,8 +3380,7 @@ async function generateAITasks(answers, auditTasks, classification, profileData,
 
 ═══ THEIR CAREER SITUATION ═══
 
-Career situation right now: ${ctx.career_situation || "not specified"}
-What's making this feel urgent: ${ctx.urgency || "not specified"}
+What they're looking to change: ${ctx.urgency || "not specified"}
 Biggest concern: "${ctx.concern}"
 Goal in 12 months: "${ctx.goal}"
 Ultimate motivation: "${ctx.ultimate_why}"
@@ -3501,12 +3389,11 @@ Ultimate motivation: "${ctx.ultimate_why}"
 
 Role: ${ctx.role}${ctx.role_detail ? ` (${ctx.role_detail})` : ""}
 Seniority: ${ctx.seniority}
-Context: familiarity with new tools (background only, do NOT use this to generate AI-focused tasks): ${ctx.ai_level}
+Readiness level: ${ctx.readiness_level}
 Main blocker to making progress: "${ctx.blocker}"
 Action vs. understanding preference: ${ctx.style}
 External vs. internal motivation: ${ctx.validation}
-How they learn best: ${ctx.learn_style}
-What they've already tried (DO NOT repeat): ${ctx.already_tried}
+
 
 ═══ THEIR PROFILE ═══
 
@@ -3543,9 +3430,9 @@ ${templateSummary}
 
 ═══ TIME CALIBRATION ═══
 
-Each task must fit within ${ctx.time_available || "10 min"}. Every task must be completable in that window by someone doing it for the first time.
+Each task must fit within 30 min. Every task must be completable in that window by someone doing it for the first time.
 
-${ctx.time_available === "5 min" ? "5 min: one tight action, two steps max, no preamble." : (ctx.time_available === "15 min" || ctx.time_available === "20 min") ? "15-20 min: one focused action with room for depth. Three to four steps." : "10 min: one concrete action with a clear stopping point. Three steps of ~3 min each."}
+"30 min: one focused action with room for depth. Three to four steps."
 Good scope: read one specific article and write one sentence about what it changes for you. Identify three things in your role that are hardest to replicate. Send one email you have been avoiding. Map one real skill gap. Test one tool on one real piece of work. Write one paragraph you have been putting off.
 NOT OK: "explore", "research broadly", "think about your options", or anything that cannot be finished in a single sitting.
 
@@ -3555,7 +3442,7 @@ Hard rule: if the task cannot be finished in the allotted time, cut scope. Small
 
 Generate 3 tasks. Task 1 MUST reference their actual work task #1 verbatim in the title.
 
-CRITICAL  - career situation shapes everything: The career situation ("${ctx.career_situation}") and urgency ("${ctx.urgency}") must determine what the tasks are about, not just the tone. A person in transition needs different tasks than a high performer quietly worried. Someone whose urgency is an upcoming review needs tasks that produce visible evidence. Someone drifting needs tasks that create momentum. Tasks must be career development actions  - about positioning, skills, visibility, decisions, and relationships  - not about learning AI tools. The ai_level field is background context only.
+CRITICAL: What they're looking to change ("${ctx.urgency}") must shape what the task is fundamentally about. Tasks must be career development actions about positioning, skills, visibility, decisions, and relationships.
 
 Every task has 5 fields:
 
@@ -3563,14 +3450,12 @@ Every task has 5 fields:
 
 "desc": 2-3 sentences. Name the specific action. Concrete  - if less experienced, say exactly what to do; if senior, give the advanced move. Write in the profile's ${profileCopy.voice} voice and ${profileCopy.pacing} pacing.
 
-"steps"  - 2 steps for 5-min tasks, 2-3 steps for 10-min tasks, 3-4 steps for 15-20-min tasks. Match step count to the time budget. Each step is a single action with a clear stopping point — never multiple sub-actions or open-ended exploration.
+"steps"  - 2-3 steps for 15-min tasks, 3-4 steps for 30-min tasks, 4-5 steps for 45-60-min tasks. Match step count to the time budget. Each step is a single action with a clear stopping point, never multiple sub-actions or open-ended exploration.
 
 "whyBase": 1-2 sentences. Connect to their ultimate motivation: "${ctx.ultimate_why}". Use their actual words. One real, specific payoff  - not generic.
 
 Every task must also:
-• Shape the format of each task's steps around how they learn: "${ctx.learn_style}". E.g. if they learn hands-on, every step is something they do, not read; if they learn through frameworks, at least one step builds a mental model
-• Never suggest what they've already tried: "${ctx.already_tried}"
-• Set the task's "time" field to "${ctx.time_available || '10 min'}"
+• Set the task's "time" field to "30 min"
 • Never include any year or date. Use "recently", "now", "currently", or "latest" instead
 
 Writing style:
@@ -3592,7 +3477,7 @@ ${activePatterns.map(p => "• " + p).join("\n")}
 
 Also generate an "outcomes" array: exactly 3 sentences describing what is concretely different after completing Week 1.
 • Each names a specific observable change, not a feeling
-• Reference their goal ("${ctx.goal}"), concern ("${ctx.concern}"), and career situation ("${ctx.career_situation || "in their field"}") directly
+• Reference their goal ("${ctx.goal}") and concern ("${ctx.concern}") directly
 • Format: "You have X", "You know Y", "You've done Z"
 • One per dimension: (1) concrete output built, (2) clarity gained, (3) habit or behavior started
 
@@ -3600,15 +3485,14 @@ Also generate a "change_commentary" field: 2-3 sentences about which of their ac
 
 Respond with ONLY valid JSON, no preamble, no markdown fences:
 
-{"tasks":[{"tag":"Tool|Read|Apply|Reflect","time":"10 min","title":"...","context":"...","desc":"...","steps":[2-4 steps depending on time, each a single concrete action],"whyBase":"..."}],"outcomes":["...","...","..."],"change_commentary":"..."}`;
+{"tasks":[{"tag":"Apply|Read|Reflect","time":"30 min","title":"...","context":"...","desc":"...","steps":[2-4 steps depending on time, each a single concrete action],"whyBase":"..."}],"outcomes":["...","...","..."],"change_commentary":"..."}`;
 
   // ── Prompt: no-audit path ─────────────────────────────────
-  const promptNoAudit = `You are generating exactly ONE personalized career development task for Day 1. Make it the most relevant, specific, actionable 10-minute task possible for this person.
+  const promptNoAudit = `You are generating exactly ONE personalized career development task for Day 1. Make it the most relevant, specific, actionable 30-minute task possible for this person.
 
 ═══ THEIR CAREER SITUATION ═══
 
-Career situation right now: ${ctx.career_situation || "not specified"}
-What's making this feel urgent: ${ctx.urgency || "not specified"}
+What they're looking to change: ${ctx.urgency || "not specified"}
 Biggest concern: "${ctx.concern}"
 Goal in 12 months: "${ctx.goal}"
 Ultimate motivation: "${ctx.ultimate_why}"
@@ -3617,12 +3501,11 @@ Ultimate motivation: "${ctx.ultimate_why}"
 
 Role: ${ctx.role}${ctx.role_detail ? ` (${ctx.role_detail})` : ""}
 Seniority: ${ctx.seniority}
-Context  - familiarity with new tools (background only, do NOT use this to generate AI-focused tasks): ${ctx.ai_level}
+Readiness level: ${ctx.readiness_level}
 Main blocker to making progress: "${ctx.blocker}"
 Action vs. understanding preference: ${ctx.style}
 External vs. internal motivation: ${ctx.validation}
-How they learn best: ${ctx.learn_style}
-What they've already tried (DO NOT repeat): ${ctx.already_tried}
+
 
 ═══ THEIR PROFILE ═══
 
@@ -3653,17 +3536,17 @@ ${templateSummary}
 
 ═══ TIME CALIBRATION ═══
 
-Each task must fit within ${ctx.time_available || "10 min"}. Every task must be completable in that window.
+Each task must fit within 30 min. Every task must be completable in that window.
 
-${ctx.time_available === "5 min" ? "5 min: one tight action, two steps max, no preamble." : (ctx.time_available === "15 min" || ctx.time_available === "20 min") ? "15-20 min: one focused action with room for depth. Three to four steps." : "10 min: one concrete action with a clear stopping point. Three steps of ~3 min each."}
+"30 min: one focused action with room for depth. Three to four steps."
 Good scope: read one specific article and write one sentence about what it changes for you. Identify three things in your role that are hardest to replicate. Send one email you have been avoiding. Map one real skill gap. Test one tool on one real piece of work. Write one paragraph you have been putting off.
 NOT OK: "explore", "research broadly", "think about your options", or anything requiring more than one sitting.
 
-Hard rule: if the task cannot be finished in 10 minutes, cut scope until it can.
+Hard rule: if the task cannot be finished in 30 minutes, cut scope until it can.
 
 ═══ INSTRUCTIONS ═══
 
-CRITICAL  - career situation shapes everything: The career situation ("${ctx.career_situation}") and urgency ("${ctx.urgency}") must determine what the tasks are about, not just the tone. A person in transition needs different tasks than a high performer quietly worried. Someone whose urgency is an upcoming review needs tasks that produce visible evidence. Someone drifting needs tasks that create momentum. Tasks must be career development actions  - about positioning, skills, visibility, decisions, and relationships  - not about learning AI tools. The ai_level field is background context only.
+CRITICAL: What they're looking to change ("${ctx.urgency}") must shape what the task is fundamentally about. Tasks must be career development actions about positioning, skills, visibility, decisions, and relationships.
 
 The task must directly address their biggest concern ("${ctx.concern}") and connect to their goal ("${ctx.goal}"), calibrated around their main blocker: "${ctx.blocker}"
 
@@ -3673,15 +3556,13 @@ Every task has 5 fields:
 
 "desc"  - 2-3 sentences. Name the specific action. Concrete  - if less experienced, say exactly what to do; if senior, give the advanced move. Write in the profile's ${profileCopy.voice} voice and ${profileCopy.pacing} pacing.
 
-"steps"  - 2 steps for 5-min tasks, 2-3 steps for 10-min tasks, 3-4 steps for 15-20-min tasks. Match step count to the time budget. Each step is a single concrete action with a clear stopping point.
+"steps"  - 2-3 steps for 15-min tasks, 3-4 steps for 30-min tasks, 4-5 steps for 45-60-min tasks. Match step count to the time budget. Each step is a single concrete action with a clear stopping point.
 
 "whyBase"  - 1-2 sentences. Connect to their ultimate motivation: "${ctx.ultimate_why}". Use their actual words. One real, specific payoff  - not generic.
 
 Every task must also:
 • Feel written for a ${ctx.seniority} ${ctx.role} specifically  - not generic career advice
-• Shape the format of each task's steps around how they learn: "${ctx.learn_style}"  - e.g. if they learn hands-on, every step is something they do, not read; if they learn through frameworks, at least one step builds a mental model
-• Never suggest what they've already tried: "${ctx.already_tried}"
-• Set the task's "time" field to "${ctx.time_available || '10 min'}"
+• Set the task's "time" field to "30 min"
 • Never include any year or date. Use "recently", "now", "currently", or "latest" instead
 
 Writing style:
@@ -3703,13 +3584,13 @@ ${activePatterns.map(p => "• " + p).join("\n")}
 
 Also generate an "outcomes" array: exactly 3 sentences describing what is concretely different after completing Week 1.
 • Each names a specific observable change, not a feeling
-• Reference their goal ("${ctx.goal}"), concern ("${ctx.concern}"), and career situation ("${ctx.career_situation || "in their field"}") directly
+• Reference their goal ("${ctx.goal}") and concern ("${ctx.concern}") directly
 • Format: "You have X", "You know Y", "You've done Z"
 • One per dimension: (1) concrete output built, (2) clarity gained, (3) habit or behavior started
 
 Respond with ONLY valid JSON, no preamble, no markdown fences:
 
-{"tasks":[{"tag":"Tool|Read|Apply|Reflect","time":"10 min","title":"...","context":"...","desc":"...","steps":[2-4 steps depending on time, each a single concrete action],"whyBase":"..."}],"outcomes":["...","...","..."]}`;
+{"tasks":[{"tag":"Apply|Read|Reflect","time":"30 min","title":"...","context":"...","desc":"...","steps":[2-4 steps depending on time, each a single concrete action],"whyBase":"..."}],"outcomes":["...","...","..."]}`;
 
   const prompt = hasAudit ? promptWithAudit : promptNoAudit;
 
@@ -3719,7 +3600,7 @@ Respond with ONLY valid JSON, no preamble, no markdown fences:
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "claude-sonnet-4-5-20250929",
+        model: "claude-sonnet-4-20250514",
         max_tokens: 4096,
         messages: [{ role: "user", content: prompt }],
       }),
@@ -3773,61 +3654,57 @@ Respond with ONLY valid JSON, no preamble, no markdown fences:
 // Called in GeneratingScreen alongside generateAITasks  - baked into plan object.
 async function generateWeekArc(answers, classification) {
   const cl = classification || {};
-  const roleNames    = ["Architecture/built environment","Arts/performance/sport","Content creation","Creative/design","Data/analytics/BI","Education/teaching","Finance/accounting","Founder/entrepreneur","Government/public sector","Healthcare/medicine","HR/people","Legal/compliance","Marketing/growth","Media/journalism/writing","Mental health/social work","Nonprofit/NGO","Nursing/allied health","Operations/strategy","Product/UX/design","Real estate/property","Research/academia","Retail/hospitality","Sales/BD","Skilled trades","Software/engineering","Supply chain/logistics","Training/L&D","Something else"];
+  const roleNames    = ROLE_NAMES;
   const goalTexts    = GOAL_TEXTS;
-  const situTexts    = ["Doing well, but anxious about what's coming","Stuck  - same level too long","Actively looking for something different","Recently displaced or navigating a transition","Successful, quietly worried about being left behind","Doing well  - wants to move faster"];
-  const urgTexts     = ["AI compressing my field faster than expected","Watched peers advance while staying flat","Layoff or restructure changed things","Review or promotion on the line","Drifting — want intentional movement","All of the above"];
-  const blockerTexts = ["Not enough time","Too much information, don't know where to start","I start but don't follow through","I learn things but don't apply them","Direction paralysis"];
-  const lk = (arr, idx) => (idx !== undefined && idx >= 0) ? arr[idx] || null : null;
-
+  const urgTexts     = URG_TEXTS;
+  const blockerTexts = BLOCKER_TEXTS;
   const goalDetailText = answers.goal_detail !== undefined && GOAL_DETAIL_QUESTIONS?.[answers.goal]
     ? GOAL_DETAIL_QUESTIONS[answers.goal].options[answers.goal_detail]?.text || ""
     : "";
 
-  const prompt = `Generate exactly 8 short week theme labels for a 56-day career development program, plus 3 short "you'll be able to" sentences for the first 3 weeks.
+  const prompt = `You are building a personalized 8-week career development arc. Generate two things:
+
+FIRST (most important): Write 3 "ability sentences" — what this person will be able to do after each of the first 3 weeks.
+THEN: Generate 8 short week theme labels.
 
 PERSON:
 Profile: ${cl.profileName || "professional"}
 Orientation: ${cl.orientation || "balanced"} (optimizer=growth · protector=defend · navigator=lead)
 Readiness: ${cl.readinessLevel || "medium"}
 Role: ${(lk(roleNames, answers.role) || "professional") + (answers.role_detail !== undefined && SUB_ROLE_QUESTIONS[answers.role] ? " (" + (SUB_ROLE_QUESTIONS[answers.role].options[answers.role_detail]?.text || "") + ")" : "")}
-Career situation: ${lk(situTexts, answers.career_situation) || "in career"}
+Seniority: ${SENIORITY_TEXTS[answers.seniority] || "mid-career"}
+Action vs. understanding: ${answers.style_outcome_process != null ? (answers.style_outcome_process < 30 ? "strongly action-oriented" : answers.style_outcome_process < 50 ? "action-leaning" : answers.style_outcome_process > 70 ? "strongly understanding-oriented" : "understanding-leaning") : "balanced"}
 What's making this feel urgent: ${lk(urgTexts, answers.urgency) || "not specified"}
-12-month goal: ${(answers.goal_custom || lk(goalTexts, answers.goal)) || "move forward"}${goalDetailText ? ` — specifically: ${goalDetailText}` : ""}${answers.goal_direction ? `\nTarget direction: ${answers.goal_direction}` : ""}
-Main blocker: ${lk(blockerTexts, answers.blocker) || "something gets in the way"}
+12-month goal: ${(answers.goal_custom || lk(goalTexts, answers.goal)) || "move forward"}${goalDetailText ? `, specifically: ${goalDetailText}` : ""}${answers.goal_direction ? `\nTarget direction: ${answers.goal_direction}` : ""}
+Main blocker: ${( normalizeBlocker(answers.blocker).map(b => blockerTexts[b]).filter(Boolean).join("; ") || "something gets in the way")}
 
-WEEK THEME RULES:
-- The 12-month goal is the destination. Every week must visibly advance toward it.
-- Week 1: first move. Start from where they are right now. Specific to their situation and readiness.
-- Week 2: deepen the foundation laid in week 1. What becomes possible after that first week.
-- Week 3: produce something concrete that serves the 12-month goal. Name what that output is.
-- Week 4: consolidation and momentum. The practice is forming.
-- Week 5: go deeper on what worked. Build the second layer.
-- Week 6: direct, unambiguous work on the 12-month goal. Name it explicitly in this label.
-- Week 7: make the work visible or shareable. Test it against reality.
-- Week 8: locked in. Habit formed. What the person leaves with.
-- Each label is 4-7 words. Specific to their goal and role — not generic.
-- Week 6 must name the goal outcome directly (e.g. "Build the case for promotion" or "Land the first industry conversation")
-- No AI references. Career development language only.
-- Second person implied (e.g. "Build the visibility muscle" not "You build...")
-- Arc should feel like a single coherent journey toward the 12-month goal
+ABILITY SENTENCES (a1, a2, a3) — REQUIRED, generate these first:
+- a1: After Week 1, what can they do? One sentence, 15-20 words.
+- a2: After Week 2, what can they do? One sentence, 15-20 words.
+- a3: After Week 3, what can they do? One sentence, 15-20 words.
+- Written directly to them: "You'll have...", "You'll know...", "You'll be able to..."
+- Tangible, specific to their role and goal. Not generic.
 
-ABILITY SENTENCE RULES (a1, a2, a3):
-- One sentence each, around 15-20 words, written directly to this person
-- Describe something tangible they'll be able to do or have after that week
-- Vary the opener naturally — "You'll have...", "You'll be able to...", "You'll know...", "Your next move will be..."
-- Concrete and specific to their role and goal — not generic
-- No AI references. No jargon. No preamble like "By the end of this week".
+WEEK THEMES (w1 through w8):
+- 4-7 words each. Specific to their goal and role.
+- Week 1: first move from where they are now.
+- Week 2: deepen week 1's foundation.
+- Week 3: produce something concrete toward the goal.
+- Week 4-5: consolidation, go deeper on what worked.
+- Week 6: direct work on the 12-month goal (name it explicitly).
+- Week 7: make the work visible. Test against reality.
+- Week 8: habit locked in. What they leave with.
+- No AI references. Second person implied.
 
-Return ONLY valid JSON:
-{"w1":"...","w2":"...","w3":"...","w4":"...","w5":"...","w6":"...","w7":"...","w8":"...","a1":"...","a2":"...","a3":"..."}`;
+Return ONLY valid JSON. a1/a2/a3 MUST be included:
+{"a1":"...","a2":"...","a3":"...","w1":"...","w2":"...","w3":"...","w4":"...","w5":"...","w6":"...","w7":"...","w8":"..."}`;
 
   try {
     const res = await fetch("/api/generate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "claude-sonnet-4-5-20250929",
+        model: "claude-sonnet-4-20250514",
         max_tokens: 1000,
         messages: [{ role: "user", content: prompt }],
       }),
@@ -3840,6 +3717,7 @@ Return ONLY valid JSON:
     if (start === -1 || end === -1) return null;
     try { return JSON.parse(text.slice(start, end + 1)); } catch { return null; }
   } catch (e) {
+    console.error("Week arc failed:", e);
     return null;
   }
 }
@@ -3851,12 +3729,13 @@ function GeneratingScreen({ answers, auditTasks, onComplete, onBack }) {
   const [failed, setFailed] = useState(false);
   const hasAudit = (auditTasks || []).filter(t => t && t.trim().length > 3).length > 0;
   const phases = hasAudit
-    ? ["Reading your answers", "Analyzing your work tasks", "Building your personalized plan"]
-    : ["Reading your answers", "Mapping your profile", "Building your personalized plan"];
+    ? ["Reading your answers", "Analyzing your work tasks", "Building your personalized program"]
+    : ["Reading your answers", "Mapping your profile", "Building your personalized program"];
 
   // Use refs to track intervals so retry properly clears previous ones
   const intervalsRef = useRef({ di: null, pi: null });
   const [errorDetail, setErrorDetail] = useState("");
+  const [retryCount, setRetryCount] = useState(0);
 
   const clearIntervals = () => {
     if (intervalsRef.current.di) clearInterval(intervalsRef.current.di);
@@ -3872,65 +3751,74 @@ function GeneratingScreen({ answers, auditTasks, onComplete, onBack }) {
     setDots("");
     intervalsRef.current.di = setInterval(() => setDots(d => d.length >= 3 ? "" : d + "."), 400);
     intervalsRef.current.pi = setInterval(() => setPhase(p => Math.min(p + 1, phases.length - 1)), 1800);
-    const templatePlan = generatePlan(answers, auditTasks);
-    const cls = classifyProfile(answers);
-    const pd = buildProfile(cls.profileName, QOpt("role", answers.role), answers.seniority, answers, cls);
-    Promise.all([
-      generateAITasks(answers, auditTasks, cls, pd, templatePlan.tasks),
-      generateWeekArc(answers, cls),
-    ]).then(([ai, arc]) => {
+
+    let templatePlan, cls;
+    try {
+      templatePlan = generatePlan(answers, auditTasks);
+      cls = classifyProfile(answers);
+    } catch (syncErr) {
+      console.error("Plan generation sync error:", syncErr);
       clearIntervals();
-      const weekArc = arc || null;
-      if (ai && ai.tasks?.length >= 1) {
+      setErrorDetail(`Sync error: ${syncErr?.message || String(syncErr)}`);
+      setFailed(true);
+      return;
+    }
+
+    // Only generate the lightweight week arc (a1/a2/a3 for results page).
+    // Day 1 task generation is deferred to dashboard entry to save tokens.
+    (async () => {
+      try {
+        let arcResult = null;
+        try {
+          arcResult = await generateWeekArc(answers, cls);
+        } catch (arcErr) {
+          console.error("Week arc error (non-fatal):", arcErr);
+        }
+
+        clearIntervals();
         onComplete({
           ...templatePlan,
-          tasks: ai.tasks.map((t, i) => ({
-            ...t,
-            whyBase: t.whyBase || templatePlan.tasks[i]?.whyBase || "",
-            why: t.whyBase || "",
-          })),
-          aiExposureCommentary: ai.change_commentary || null,
-          outcomes: (ai.outcomes?.length >= 3) ? ai.outcomes : templatePlan.outcomes,
-          weekArc,
+          tasks: [],
+          weekArc: arcResult || null,
         });
-      } else {
-        // AI failed — show error + retry instead of falling back to template tasks
-        setErrorDetail(_lastAITaskError || "API returned no usable data. Check browser console for details.");
-        setFailed(true);
+      } catch (err) {
+        console.error("GeneratingScreen error:", err);
+        clearIntervals();
+        if (hasRetriedRef.current) {
+          onComplete({ ...templatePlan, tasks: [], weekArc: null });
+        } else {
+          setErrorDetail(`Exception: ${err?.message || String(err)}`);
+          setFailed(true);
+        }
       }
-    }).catch((err) => {
-      console.error("GeneratingScreen error:", err);
-      clearIntervals();
-      setErrorDetail(`Exception: ${err?.message || String(err)}`);
-      setFailed(true);
-    });
+    })();
   };
 
   useEffect(() => { run(); return clearIntervals; }, []);
 
-  const [retryCount, setRetryCount] = useState(0);
-
   // Auto-retry once on first failure (transient API errors)
+  const hasRetriedRef = useRef(false);
   useEffect(() => {
-    if (failed && retryCount === 0) {
+    if (failed && !hasRetriedRef.current) {
+      hasRetriedRef.current = true;
       const timer = setTimeout(() => { setRetryCount(1); run(); }, 1500);
       return () => clearTimeout(timer);
     }
   }, [failed]);
 
-  if (failed && retryCount > 0) {
+  if (failed && hasRetriedRef.current) {
     return (
       <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "#fff" }}>
         <div style={{ textAlign: "center", maxWidth: 440, padding: "0 32px" }}>
           <p style={{ fontFamily: T.serif, fontSize: 20, fontWeight: 400, color: T.black, margin: "0 0 8px" }}>Something went wrong.</p>
           <p style={{ fontFamily: T.sans, fontSize: 14, color: T.muted, margin: "0 0 28px", lineHeight: 1.6 }}>We could not build your plan. Check your connection and try again.</p>
           <div style={{ display: "flex", gap: 10, justifyContent: "center", marginBottom: 28 }}>
-            <button onClick={() => { setRetryCount(0); run(); }}
-              style={{ background: T.black, color: "#fff", border: "none", fontFamily: T.sans, fontSize: 14, fontWeight: 600, padding: "13px 28px", borderRadius: 0, cursor: "pointer" }}>
+            <button onClick={() => { hasRetriedRef.current = false; setRetryCount(0); run(); }}
+              style={{ background: T.black, color: "#fff", border: "none", fontFamily: T.sans, fontSize: 14, fontWeight: 600, padding: "13px 28px", borderRadius: 10, cursor: "pointer" }}>
               Try again
             </button>
             <button onClick={onBack}
-              style={{ background: "none", color: T.muted, border: `1px solid ${T.border}`, fontFamily: T.sans, fontSize: 14, padding: "13px 20px", borderRadius: 0, cursor: "pointer" }}>
+              style={{ background: "none", color: T.muted, border: `1px solid ${T.border}`, fontFamily: T.sans, fontSize: 14, padding: "13px 20px", borderRadius: 10, cursor: "pointer" }}>
               Back
             </button>
           </div>
@@ -3951,7 +3839,7 @@ function GeneratingScreen({ answers, auditTasks, onComplete, onBack }) {
     <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "#fff" }}>
       <div style={{ textAlign: "center", maxWidth: 400, padding: "0 32px" }}>
         <div style={{ width: 36, height: 36, borderRadius: "50%", border: `2.5px solid ${T.border}`, borderTopColor: T.purple, margin: "0 auto 32px", animation: "spin 0.8s linear infinite" }} />
-        <style>{`@keyframes spin { to { transform: rotate(360deg); } } @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } } @keyframes firePulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.18); } }`}</style>
+        <style>{`@keyframes spin { to { transform: rotate(360deg); } } @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } } @keyframes firePulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.18); } } @keyframes pulse { 0%, 100% { opacity: 0.3; transform: scale(0.85); } 50% { opacity: 1; transform: scale(1); } }`}</style>
         <p style={{ fontFamily: T.serif, fontSize: 20, fontWeight: 400, color: T.black, margin: "0 0 8px", letterSpacing: -0.2 }}>{phases[phase]}{dots}</p>
       </div>
     </div>
@@ -3967,19 +3855,28 @@ async function generateWeekPlan(plan, day1Task) {
   const answers = plan._answers || {};
   const cl = plan.classification || {};
 
-  const roleNames     = ["Architecture/built environment","Arts/performance/sport","Content creation","Creative/design","Data/analytics/BI","Education/teaching","Finance/accounting","Founder/entrepreneur","Government/public sector","Healthcare/medicine","HR/people","Legal/compliance","Marketing/growth","Media/journalism/writing","Mental health/social work","Nonprofit/NGO","Nursing/allied health","Operations/strategy","Product/UX/design","Real estate/property","Research/academia","Retail/hospitality","Sales/BD","Skilled trades","Software/engineering","Supply chain/logistics","Training/L&D","Something else"];
+  const roleNames     = ROLE_NAMES;
   const goalTexts     = GOAL_TEXTS;
-  const situTexts     = ["Doing well, but anxious about what's coming","Stuck  - same level too long","Actively looking for something different","Recently displaced or navigating a transition","Successful, quietly worried about being left behind","Doing well  - wants to move faster"];
-  const blockerTexts  = ["Not enough time  - days are full","Too much information, don't know where to start","I start but don't follow through","I learn things but don't apply them to actual work","Direction paralysis  - too many options or none that feel right"];
-  const learnOpts     = ["Reading articles or reports","Hands-on  - doing the thing, not reading about it","Short summaries and key takeaways","Real examples from my specific industry","Watching or listening","Trying a tool or doing an exercise"];
-  const triedOpts     = ["Reading articles, books, or career content","Watching YouTube or taking online courses","Attending a conference or workshop","Trying tools or new approaches on my own","Talking to colleagues, a mentor, or a coach","Working with a recruiter or career advisor","Nothing yet"];
+  const blockerTexts  = BLOCKER_TEXTS;
+  const urgTexts      = URG_TEXTS;
+  const seniorityTexts = SENIORITY_TEXTS;
 
-  const urgTexts      = ["AI compressing my field faster than expected","Watched peers advance while staying flat","Layoff or restructure changed things","Review or promotion on the line","Drifting — want intentional movement","All of the above"];
+  const subRoleText = answers.role_detail !== undefined && SUB_ROLE_QUESTIONS[answers.role]
+    ? SUB_ROLE_QUESTIONS[answers.role].options[answers.role_detail]?.text || ""
+    : "";
+  const goalDetailText = answers.goal_detail !== undefined ? ((GOAL_DETAIL_QUESTIONS[answers.goal])?.options?.[answers.goal_detail]?.text || "") : "";
+  const goalDirection = (answers.goal_direction || "").trim();
+  const goalStatementText = plan._goalStatement || "";
 
-  const lk  = (arr, idx) => (idx !== undefined && idx >= 0) ? arr[idx] || null : null;
-  const lkm = (arr, idxArr) => (idxArr || []).map(i => arr[i]).filter(Boolean).join(", ");
-  const alreadyTried = lkm(triedOpts, answers.already_tried) || "nothing yet";
-  const learnStyle   = lkm(learnOpts,  answers.learn_style);
+  const stylePref = answers.style_outcome_process != null
+    ? (answers.style_outcome_process < 30 ? "strongly action-oriented — skip context, give the move"
+      : answers.style_outcome_process < 50 ? "action-leaning — prefers doing over reading"
+      : answers.style_outcome_process > 70 ? "strongly context-oriented — needs to understand before acting"
+      : "context-leaning — wants enough landscape to act with confidence") : "balanced";
+
+  // Week 1 theme from arc
+  const arc = plan.weekArc || {};
+  const week1Theme = arc.w1 || "Build your baseline";
 
   const prompt = `Generate exactly 6 personalized career development tasks for Days 2 through 7 of this person's program. Day 1 is already done  - build forward from it.
 
@@ -3987,36 +3884,41 @@ async function generateWeekPlan(plan, day1Task) {
 Profile: ${plan.profileName}
 Orientation: ${cl.orientation || "balanced"}
 Readiness: ${cl.readinessLevel || "medium"}
-Role: ${(lk(roleNames, answers.role) || "professional") + (answers.role_detail !== undefined && SUB_ROLE_QUESTIONS[answers.role] ? " (" + (SUB_ROLE_QUESTIONS[answers.role].options[answers.role_detail]?.text || "") + ")" : "")}
-Career situation right now: ${lk(situTexts, answers.career_situation) || "in career"}
+Role: ${(lk(roleNames, answers.role) || "professional") + (subRoleText ? ` (${subRoleText})` : "")}
+Seniority: ${lk(seniorityTexts, answers.seniority) || "mid-career"}
+Action vs. understanding: ${stylePref}
 What's making this feel urgent: ${lk(urgTexts, answers.urgency) || "not specified"}
-12-month goal: ${(answers.goal_custom || lk(goalTexts, answers.goal)) || "move forward"}
-Main blocker: ${lk(blockerTexts, answers.blocker) || "something gets in the way"}
-Already tried (DO NOT repeat): ${alreadyTried}
-How they learn best: ${learnStyle || "any format"}
+Main blocker: ${( normalizeBlocker(answers.blocker).map(b => blockerTexts[b]).filter(Boolean).join("; ") || "something gets in the way")}
+
+═══ GOAL CONTEXT ═══
+12-month goal: ${(answers.goal_custom || lk(goalTexts, answers.goal)) || "move forward"}${goalDetailText ? ` (specifically: ${goalDetailText})` : ""}${goalDirection ? `\nTarget direction: ${goalDirection}` : ""}${goalStatementText ? `\nNora-refined goal statement: "${goalStatementText}"` : ""}
+
+═══ THIS WEEK ═══
+Week 1 focus: "${week1Theme}"
 
 ═══ DAY 1 (already done) ═══
 "${day1Task?.title || "Day 1 task"}" [${day1Task?.tag || "Apply"}]
 
 ═══ RULES ═══
-- CRITICAL: Career situation ("${lk(situTexts, answers.career_situation)}"), urgency ("${lk(urgTexts, answers.urgency)}"), and 12-month goal ("${answers.goal_custom || lk(goalTexts, answers.goal)}") must determine what the tasks are about — not just the tone. A person in transition needs different tasks than a high performer quietly worried. Someone with a promotion on the line needs tasks that produce visible evidence.
-- Each task is a standalone 10-minute career development action
+- CRITICAL: Every task must serve BOTH the 12-month goal AND the Week 1 focus ("${week1Theme}"). If a task doesn't clearly connect to both, rethink it.
+- What they're looking to change ("${lk(urgTexts, answers.urgency)}") must shape what the tasks are fundamentally about.
+- Each task is a standalone 30-minute career development action
 - Build progressively  - each day deepens or extends the previous
 - NO AI tool tasks. Career development only: positioning, skills, visibility, decisions, relationships
-- Never repeat what they've already tried: ${alreadyTried}
 - Never repeat Day 1
-- Shape steps around how they learn: ${learnStyle || "any format"}
+- Shape tasks around their approach preference (${stylePref}): ${stylePref.includes("action") ? "lead with doing, not reading" : stylePref.includes("context") ? "lead with context and frameworks before action" : "balance context and action"}
 - If Day 1 had a reflection note ("${day1Task?.reflection || ""}"), build Day 2 directly from what they described
 - Second person. Active voice. Short sentences. No em dashes.
+- NEVER include specific years, months, quarters, or dates.
 
 Return ONLY valid JSON, no markdown:
 {"days":[
-  {"day":2,"tag":"Apply|Read|Reflect|Tool","time":"10 min","title":"...","desc":"...","steps":[2-4 steps depending on time, each a single concrete action],"whyBase":"..."},
-  {"day":3,"tag":"...","time":"10 min","title":"...","desc":"...","steps":[2-4 steps depending on time, each a single concrete action],"whyBase":"..."},
-  {"day":4,"tag":"...","time":"10 min","title":"...","desc":"...","steps":[2-4 steps depending on time, each a single concrete action],"whyBase":"..."},
-  {"day":5,"tag":"...","time":"10 min","title":"...","desc":"...","steps":[2-4 steps depending on time, each a single concrete action],"whyBase":"..."},
-  {"day":6,"tag":"...","time":"10 min","title":"...","desc":"...","steps":[2-4 steps depending on time, each a single concrete action],"whyBase":"..."},
-  {"day":7,"tag":"...","time":"10 min","title":"...","desc":"...","steps":[2-4 steps depending on time, each a single concrete action],"whyBase":"..."}
+  {"day":2,"tag":"Apply|Read|Reflect","time":"30 min","title":"...","desc":"...","steps":[2-4 steps depending on time, each a single concrete action],"whyBase":"..."},
+  {"day":3,"tag":"...","time":"30 min","title":"...","desc":"...","steps":[2-4 steps depending on time, each a single concrete action],"whyBase":"..."},
+  {"day":4,"tag":"...","time":"30 min","title":"...","desc":"...","steps":[2-4 steps depending on time, each a single concrete action],"whyBase":"..."},
+  {"day":5,"tag":"...","time":"30 min","title":"...","desc":"...","steps":[2-4 steps depending on time, each a single concrete action],"whyBase":"..."},
+  {"day":6,"tag":"...","time":"30 min","title":"...","desc":"...","steps":[2-4 steps depending on time, each a single concrete action],"whyBase":"..."},
+  {"day":7,"tag":"...","time":"30 min","title":"...","desc":"...","steps":[2-4 steps depending on time, each a single concrete action],"whyBase":"..."}
 ]}`;
 
   try {
@@ -4024,7 +3926,7 @@ Return ONLY valid JSON, no markdown:
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "claude-sonnet-4-5-20250929",
+        model: "claude-sonnet-4-20250514",
         max_tokens: 3000,
         messages: [{ role: "user", content: prompt }],
       }),
@@ -4051,18 +3953,32 @@ async function generateWeekBatch(plan, weekNum, startDay, dayTasks, dayStatus, d
   const answers = plan._answers || {};
   const cl = plan.classification || {};
 
-  const roleNames    = ["Architecture/built environment","Arts/performance/sport","Content creation","Creative/design","Data/analytics/BI","Education/teaching","Finance/accounting","Founder/entrepreneur","Government/public sector","Healthcare/medicine","HR/people","Legal/compliance","Marketing/growth","Media/journalism/writing","Mental health/social work","Nonprofit/NGO","Nursing/allied health","Operations/strategy","Product/UX/design","Real estate/property","Research/academia","Retail/hospitality","Sales/BD","Skilled trades","Software/engineering","Supply chain/logistics","Training/L&D","Something else"];
+  const roleNames    = ROLE_NAMES;
   const goalTexts    = GOAL_TEXTS;
-  const situTexts    = ["Doing well, but anxious about what's coming","Stuck — same level too long","Actively looking for something different","Recently displaced or navigating a transition","Successful, quietly worried about being left behind","Doing well — wants to move faster"];
-  const urgTexts     = ["AI compressing my field faster than expected","Watched peers advance while staying flat","Layoff or restructure changed things","Review or promotion on the line","Drifting — want intentional movement","All of the above"];
-  const triedOpts    = ["Reading articles, books, or career content","Watching YouTube or taking online courses","Attending a conference or workshop","Trying tools or new approaches on my own","Talking to colleagues, a mentor, or a coach","Working with a recruiter or career advisor","Nothing yet"];
-  const lk  = (arr, idx) => (idx !== undefined && idx >= 0) ? arr[idx] || null : null;
-  const lkm = (arr, idxArr) => (idxArr || []).map(i => arr[i]).filter(Boolean).join(", ");
+  const urgTexts     = URG_TEXTS;
 
-  const alreadyTried = lkm(triedOpts, answers.already_tried) || "nothing yet";
   const arc = plan.weekArc || {};
-  const weekThemes = [arc.w1, arc.w2, arc.w3, arc.w4];
+  const weekThemes = [arc.w1, arc.w2, arc.w3, arc.w4, arc.w5, arc.w6, arc.w7, arc.w8];
   const weekTheme = weekThemes[weekNum - 1] || "Keep building";
+
+  // Goal: use Nora-refined goal statement if available, otherwise quiz goal
+  const goalStatementText = plan._goalStatement || "";
+  const rawGoalText = answers.goal_custom || lk(goalTexts, answers.goal) || "move forward";
+  const effectiveGoal = goalStatementText || rawGoalText;
+  const goalDetailText = answers.goal_detail !== undefined && GOAL_DETAIL_QUESTIONS?.[answers.goal]
+    ? GOAL_DETAIL_QUESTIONS[answers.goal].options[answers.goal_detail]?.text || ""
+    : "";
+  const goalDirection = (answers.goal_direction || "").trim();
+
+  // Blocker text
+  const blockerText = normalizeBlocker(answers.blocker).map(b => BLOCKER_TEXTS[b]).filter(Boolean).join("; ") || "not specified";
+
+  // Style preference
+  const stylePref = answers.style_outcome_process != null
+    ? (answers.style_outcome_process < 30 ? "strongly action-oriented"
+      : answers.style_outcome_process < 50 ? "action-leaning"
+      : answers.style_outcome_process > 70 ? "strongly understanding-oriented"
+      : "understanding-leaning") : "balanced";
 
   // Full history of completed days
   const endDay = startDay - 1;
@@ -4079,43 +3995,93 @@ async function generateWeekBatch(plan, weekNum, startDay, dayTasks, dayStatus, d
     .map(d => `Day ${d}: "${(dayNotes || {})[d]}"`);
   const reflectionSummary = reflections.length > 0 ? `\nRecent reflections to build on:\n${reflections.slice(-5).join("\n")}` : "";
 
-  const endDay2 = startDay + 6;
-  const prompt = `Generate exactly 7 personalized 10-minute career development tasks for Days ${startDay} through ${endDay2} (Week ${weekNum}) of this person's 30-day program.
+  // Compute week-level analytics to inform generation
+  const prevWeekStart = startDay - 7;
+  const prevWeekEnd = startDay - 1;
+  const prevWeekDone = Array.from({ length: 7 }, (_, i) => prevWeekStart + i).filter(d => (dayStatus || {})[d] === 'done').length;
+  const prevWeekSkipped = Array.from({ length: 7 }, (_, i) => prevWeekStart + i).filter(d => (dayStatus || {})[d] === 'skipped').length;
+  const totalDone = Object.values(dayStatus || {}).filter(s => s === 'done').length;
+  const totalSkipped = Object.values(dayStatus || {}).filter(s => s === 'skipped').length;
+  const completionRate = (totalDone + totalSkipped) > 0 ? Math.round(totalDone / (totalDone + totalSkipped) * 100) : 100;
+  const lastWeekSignal = prevWeekDone >= 6 ? "strong week — go deeper, increase challenge"
+    : prevWeekDone >= 4 ? "solid week — maintain pace, build on what worked"
+    : prevWeekDone >= 2 ? "patchy week — start lighter this week, rebuild momentum"
+    : "very difficult week — open with the easiest possible task, reduce friction significantly";
 
-═══ PROFILE ═══
+  // Full 8-week arc (original plan) so the model sees the journey
+  const allThemes = [arc.w1, arc.w2, arc.w3, arc.w4, arc.w5, arc.w6, arc.w7, arc.w8].map((t, i) => `Week ${i+1}: "${t || 'TBD'}"`).join("\n");
+
+  const endDay2 = startDay + 6;
+  const prompt = `Generate exactly 7 personalized career development tasks for Days ${startDay} through ${endDay2} (Week ${weekNum}).
+
+FIRST: Evaluate whether the originally planned Week ${weekNum} theme still fits this person based on what actually happened. Then generate tasks aligned with your decision.
+
+═══ WHO THIS PERSON IS ═══
 Profile: ${plan.profileName}
 Role: ${(lk(roleNames, answers.role) || "professional") + (answers.role_detail !== undefined && SUB_ROLE_QUESTIONS[answers.role] ? " (" + (SUB_ROLE_QUESTIONS[answers.role].options[answers.role_detail]?.text || "") + ")" : "")}
-Career situation right now: ${lk(situTexts, answers.career_situation) || "in career"}
+Seniority: ${SENIORITY_TEXTS[answers.seniority] || "mid-career"}
+Readiness: ${cl.readinessLevel || "medium"}
+Orientation: ${cl.orientation || "balanced"} (optimizer=growth · protector=defend · navigator=lead)
+Approach: ${stylePref}
 What's making this feel urgent: ${lk(urgTexts, answers.urgency) || "not specified"}
-12-month goal: ${(answers.goal_custom || lk(goalTexts, answers.goal)) || "move forward"}
-Already tried (DO NOT repeat): ${alreadyTried}
-${noraInsight ? `\nNora coaching insight: ${noraInsight}\n` : ""}
+Main blockers: ${blockerText}
+
+═══ THEIR GOAL ═══
+12-month goal: "${effectiveGoal}"${goalDetailText ? ` (specifically: ${goalDetailText})` : ""}${goalDirection ? `\nTarget direction: ${goalDirection}` : ""}
+${noraInsight ? `\n═══ NORA COACHING CONTEXT ═══\nNora (the person's AI coach) observed the following from recent conversations. Use this to shape tasks — it reflects what the person actually said, not just what they picked in a quiz. If Nora's observations suggest a different direction, skill focus, or priority than the original plan, FOLLOW NORA's insight — it's more current than the quiz:\n${noraInsight}\n` : ""}
+═══ ORIGINALLY PLANNED ARC ═══
+${allThemes}
+
+The originally planned theme for Week ${weekNum} is: "${weekTheme}"
+
+═══ THEME ADAPTATION INSTRUCTIONS ═══
+Evaluate whether "${weekTheme}" is still the right focus for Week ${weekNum}. Consider:
+- Did last week's performance reveal something the original plan didn't anticipate?
+- Did the person's notes or Nora conversations surface a more pressing priority?
+- Is the person ahead of schedule (could skip to a harder theme) or behind (needs a consolidation week)?
+- Has their goal shifted or become more specific through Nora conversations?
+
+If the original theme still fits, keep it. If something better serves the person right now, write a new 4-7 word theme that:
+- Connects to their 12-month goal
+- Reflects what actually happened, not what was planned
+- Feels like a natural next step from where they are NOW
+Return your decision in the "adaptedTheme" field.
 ═══ WEEK ${weekNum} OBJECTIVE ═══
 "${weekTheme}"
+
+═══ PREVIOUS WEEK PERFORMANCE ═══
+Last week: ${prevWeekDone}/7 days completed, ${prevWeekSkipped} skipped
+Overall completion rate: ${completionRate}%
+Signal for this week: ${lastWeekSignal}
 
 ═══ FULL HISTORY (Days 1-${endDay}) ═══
 ${history}${reflectionSummary}
 
 ═══ RULES ═══
-- CRITICAL: Career situation ("${lk(situTexts, answers.career_situation)}"), urgency ("${lk(urgTexts, answers.urgency)}"), and 12-month goal ("${answers.goal_custom || lk(goalTexts, answers.goal)}") must shape what these tasks are fundamentally about — not just the tone.
-- Each task is standalone, 10 minutes, doable in one sitting
-- Build progressively on the history above. Never repeat a completed task.
-- Week ${weekNum} theme: "${weekTheme}" — all tasks should advance this specific objective
+- CRITICAL: The 12-month goal ("${effectiveGoal}") must be the through-line — every task should visibly advance toward it.${goalDetailText ? ` The specific angle is: "${goalDetailText}".` : ""}${goalDirection ? ` They're targeting: "${goalDirection}".` : ""}
+- Day ${startDay} (the first task of this new week) is especially important: it must feel like a natural continuation of what came before, not a fresh start. Reference something specific from the previous week's completed tasks or notes. The person should feel seen, not reset.
+- Use the previous week performance signal above to calibrate difficulty and task length.
+- Build progressively on the history. Never repeat a completed task. Reference specific things from their notes.
+- All tasks should serve your chosen Week ${weekNum} theme (either the original or your adapted version)
+- Shape tasks around their approach preference (${stylePref}): ${stylePref.includes("action") ? "lead with doing, not reading" : stylePref.includes("understanding") ? "lead with context and frameworks before action" : "balance context and action"}.
+- Account for their blockers (${blockerText}): ${normalizeBlocker(answers.blocker).includes(0) ? "keep tasks tight, 30 min max" : ""}${normalizeBlocker(answers.blocker).includes(2) ? "every task needs a clear, concrete endpoint" : ""}${normalizeBlocker(answers.blocker).includes(3) ? "emphasize application over consumption" : ""}
 - Career development only: positioning, skills, visibility, decisions, relationships
-- NO AI tool tasks
-- If many days were skipped recently, make Week ${weekNum} tasks shorter and lower-friction
-- REFLECTIONS: The history above includes reflection notes (after the pipe on each day). Read them. If a person named something specific they did, build on it. If they mentioned a struggle, adjust scope down for the first few days of this week.
-- Second person. Active voice. No em dashes. No generic motivational language.
+- NO AI tool tasks (no ChatGPT, Claude, Copilot prompting tasks)
+- If many skips in history: reduce friction, shorter tasks, more concrete endpoints
+- If notes show struggle on a topic: ease off that topic, don't repeat it
+- If notes show energy on a topic: go deeper on it
+- Tasks should vary in type — mix of Apply, Read, Reflect
+- Second person. Active voice. No em dashes. No generic motivational language. No "just", "simply", "easy".
 
 Return ONLY valid JSON, no markdown:
-{"days":[
-  {"day":${startDay},"tag":"Apply|Read|Reflect|Tool","time":"10 min","title":"...","desc":"...","steps":[2-4 steps depending on time, each a single concrete action],"whyBase":"..."},
-  {"day":${startDay+1},"tag":"...","time":"10 min","title":"...","desc":"...","steps":[2-4 steps depending on time, each a single concrete action],"whyBase":"..."},
-  {"day":${startDay+2},"tag":"...","time":"10 min","title":"...","desc":"...","steps":[2-4 steps depending on time, each a single concrete action],"whyBase":"..."},
-  {"day":${startDay+3},"tag":"...","time":"10 min","title":"...","desc":"...","steps":[2-4 steps depending on time, each a single concrete action],"whyBase":"..."},
-  {"day":${startDay+4},"tag":"...","time":"10 min","title":"...","desc":"...","steps":[2-4 steps depending on time, each a single concrete action],"whyBase":"..."},
-  {"day":${startDay+5},"tag":"...","time":"10 min","title":"...","desc":"...","steps":[2-4 steps depending on time, each a single concrete action],"whyBase":"..."},
-  {"day":${startDay+6},"tag":"...","time":"10 min","title":"...","desc":"...","steps":[2-4 steps depending on time, each a single concrete action],"whyBase":"..."}
+{"adaptedTheme":"4-7 word theme for this week (can be the same as original if it still fits)","days":[
+  {"day":${startDay},"tag":"Apply|Read|Reflect","time":"30 min","title":"...","desc":"...","steps":[2-4 steps depending on time, each a single concrete action],"whyBase":"..."},
+  {"day":${startDay+1},"tag":"...","time":"30 min","title":"...","desc":"...","steps":[2-4 steps depending on time, each a single concrete action],"whyBase":"..."},
+  {"day":${startDay+2},"tag":"...","time":"30 min","title":"...","desc":"...","steps":[2-4 steps depending on time, each a single concrete action],"whyBase":"..."},
+  {"day":${startDay+3},"tag":"...","time":"30 min","title":"...","desc":"...","steps":[2-4 steps depending on time, each a single concrete action],"whyBase":"..."},
+  {"day":${startDay+4},"tag":"...","time":"30 min","title":"...","desc":"...","steps":[2-4 steps depending on time, each a single concrete action],"whyBase":"..."},
+  {"day":${startDay+5},"tag":"...","time":"30 min","title":"...","desc":"...","steps":[2-4 steps depending on time, each a single concrete action],"whyBase":"..."},
+  {"day":${startDay+6},"tag":"...","time":"30 min","title":"...","desc":"...","steps":[2-4 steps depending on time, each a single concrete action],"whyBase":"..."}
 ]}`;
 
   try {
@@ -4123,7 +4089,7 @@ Return ONLY valid JSON, no markdown:
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "claude-sonnet-4-5-20250929",
+        model: "claude-sonnet-4-20250514",
         max_tokens: 3500,
         messages: [{ role: "user", content: prompt }],
       }),
@@ -4134,7 +4100,7 @@ Return ONLY valid JSON, no markdown:
     const start = text.indexOf("{"); const end = text.lastIndexOf("}");
     if (start === -1 || end === -1) return null;
     let parsed; try { parsed = JSON.parse(text.slice(start, end + 1)); } catch { return null; }
-    if (parsed.days?.length >= 1) return parsed.days;
+    if (parsed.days?.length >= 1) return { days: parsed.days, adaptedTheme: parsed.adaptedTheme || null };
     return null;
   } catch (e) {
     console.error("Week batch gen failed:", e);
@@ -4153,34 +4119,33 @@ async function generateNextDayTask(plan, dayNum, status, note, noraInsight, dayT
   const answers = plan._answers || {};
   const cl = plan.classification || {};
   const profileName = plan.profileName;
-  const goalDetailText = answers.goal_detail !== undefined ? ((GOAL_DETAIL_QUESTIONS[answers.goal] || GOAL_DETAIL_QUESTION)?.options?.[answers.goal_detail]?.text || "") : "";
+  const goalDetailText = answers.goal_detail !== undefined ? ((GOAL_DETAIL_QUESTIONS[answers.goal])?.options?.[answers.goal_detail]?.text || "") : "";
+  const goalDirection = (answers.goal_direction || "").trim();
+  const goalStatementText = plan._goalStatement || "";
+
+  // Compute current week theme from weekArc for this day's week number
+  const thisWeekNum = Math.min(8, Math.ceil((dayNum + 1) / 7));
+  const arc = plan.weekArc || {};
+  const arcThemes = [arc.w1, arc.w2, arc.w3, arc.w4, arc.w5, arc.w6, arc.w7, arc.w8];
+  const thisWeekTheme = arcThemes[thisWeekNum - 1] || "Keep building";
+
+  // Sub-role detail
+  const subRoleText = answers.role_detail !== undefined && SUB_ROLE_QUESTIONS[answers.role]
+    ? SUB_ROLE_QUESTIONS[answers.role].options[answers.role_detail]?.text || ""
+    : "";
 
   // Lookup tables  - full quiz answer text
-  const roleNames     = ["Architecture/built environment","Arts/performance/sport","Content creation","Creative/design","Data/analytics/BI","Education/teaching","Finance/accounting","Founder/entrepreneur","Government/public sector","Healthcare/medicine","HR/people","Legal/compliance","Marketing/growth","Media/journalism/writing","Mental health/social work","Nonprofit/NGO","Nursing/allied health","Operations/strategy","Product/UX/design","Real estate/property","Research/academia","Retail/hospitality","Sales/BD","Skilled trades","Software/engineering","Supply chain/logistics","Training/L&D","Something else"];
+  const roleNames     = ROLE_NAMES;
   const goalTexts     = GOAL_TEXTS;
-  const situTexts     = ["Doing well, but anxious about what's coming","Stuck  - same level too long","Actively looking for something different","Recently displaced or navigating a transition","Successful, quietly worried about being left behind","Doing well  - wants to move faster"];
-  const urgTexts      = ["AI compressing my field faster than expected","Watched peers advance while staying flat","Layoff or restructure changed things","Review or promotion on the line","Drifting  - want intentional movement","All of the above"];
-  const concernTexts  = ["Not being seen as relevant or up to date","Losing ground to peers or younger colleagues","My role changing faster than I can adapt","Missing the next opportunity","Not knowing what I don't know  - blind spots","Time passing without real progress"];
-  const blockerTexts  = ["Not enough time  - days are full","Too much information, don't know where to start","I start but don't follow through","I learn things but don't apply them to actual work","Direction paralysis  - too many options or none that feel right"];
-  const seniorityTexts = ["0–3 years","4–8 years","9–15 years","16+ years"];
-  const aiTexts       = ["Don't use AI tools at all","Tried a few things, nothing sticks","Use AI occasionally","AI is part of how I work every day"];
-  const learnOpts     = ["Reading articles or reports","Hands-on  - doing the thing, not reading about it","Short summaries and key takeaways","Real examples from my specific industry","Watching or listening","Trying a tool or doing an exercise"];
-  const valuableOpts  = ["Knowing which skills are worth building right now","Understanding what's actually changing in my field","Knowing how my role might change","Having a clear weekly plan  - not advice, a plan","Seeing real examples from people in my situation","Understanding enough to make smart decisions for my team"];
-  const triedOpts     = ["Reading articles, books, or career content","Watching YouTube or taking online courses","Attending a conference or workshop","Trying tools or new approaches on my own","Talking to colleagues, a mentor, or a coach","Working with a recruiter or career advisor","Nothing yet"];
-
-  const lk  = (arr, idx) => (idx !== undefined && idx >= 0) ? arr[idx] || null : null;
-  const lkm = (arr, idxArr) => (idxArr || []).map(i => arr[i]).filter(Boolean).join(", ");
+  const urgTexts      = URG_TEXTS;
+  const blockerTexts  = BLOCKER_TEXTS;
+  const seniorityTexts = SENIORITY_TEXTS;
 
   const stylePref = answers.style_outcome_process != null
     ? (answers.style_outcome_process < 30 ? "strongly action-oriented  - skip context, give the move"
       : answers.style_outcome_process < 50 ? "action-leaning  - prefers doing over reading"
       : answers.style_outcome_process > 70 ? "strongly context-oriented  - needs to understand before acting"
       : "context-leaning  - wants enough landscape to act with confidence") : "balanced";
-  const validPref = answers.style_external_internal != null
-    ? (answers.style_external_internal < 30 ? "strongly externally motivated  - wants peers/boss to see progress"
-      : answers.style_external_internal < 50 ? "externally leaning  - visible progress matters"
-      : answers.style_external_internal > 70 ? "strongly internally motivated  - building for personal confidence"
-      : "internally leaning  - quiet competence over performance") : "balanced";
 
   // Full previous-day history
   const dayHistory = Array.from({ length: dayNum }, (_, i) => i + 1).map(d => {
@@ -4191,63 +4156,94 @@ async function generateNextDayTask(plan, dayNum, status, note, noraInsight, dayT
     return `Day ${d}: ${ds === 'done' ? 'DONE' : ds === 'skipped' ? 'SKIPPED' : 'PENDING'} | Task: ${tl}${dn ? ` | Note: "${dn}"` : ""}`;
   }).join("\n");
 
-  const TIME_LABELS2 = ["5 min", "10 min", "15 min", "20 min"];
-  const timePref = (plan._answers?.time_available !== undefined) ? TIME_LABELS2[plan._answers.time_available] || "10 min" : "10 min";
+  const timePref = "30 min";
 
-  const perfSignal = status === 'done'
-    ? `Completed Day ${dayNum}.${note ? ` Their note: "${note}"` : " No reflection note."}`
-    : `Skipped Day ${dayNum}. ${note ? `Their note: "${note}"` : "No reason given."} Generate a shorter, lower-friction task.`;
+  const perfSignal = dayNum === 0
+    ? "This is Day 1. Generate the best possible first task for this person — specific to their role, goal, and profile."
+    : status === 'done'
+      ? "Completed Day " + dayNum + "." + (note ? " Their note: \"" + note + "\"" : " No reflection note.")
+      : status === 'skipped'
+        ? "Skipped Day " + dayNum + ". " + (note ? "Their note: \"" + note + "\"" : "No reason given.") + " Generate a shorter, lower-friction task."
+        : "Day " + dayNum + " is in progress. Generate the next logical task.";
 
-  const learnStyle   = lkm(learnOpts,    answers.learn_style);
-  const alreadyTried = lkm(triedOpts,    answers.already_tried) || "nothing yet";
+  // ── Day 1 enrichment: include audit tasks, profile copy, and psychological patterns ──
+  const isDay1 = dayNum === 0;
+  let day1Context = "";
+  if (isDay1) {
+    // Audit tasks (the person's actual work descriptions)
+    const auditTasks = (plan.taskAnalysis || []).map(t => t.task).filter(Boolean);
+    if (auditTasks.length > 0) {
+      day1Context += `\n═══ THEIR ACTUAL WORK (described in their own words) ═══\n`;
+      auditTasks.forEach((t, i) => { day1Context += `Task ${i+1}: "${t}"\n`; });
+    }
+    // Profile copy (voice, pacing, entry point)
+    const pd = plan.profileData || {};
+    if (pd.headline || pd.voice) {
+      day1Context += `\n═══ PROFILE COPY ═══\n`;
+      if (pd.headline) day1Context += `Headline: "${pd.headline}"\n`;
+      if (pd.description) day1Context += `Description: "${pd.description}"\n`;
+      if (pd.entryPoint) day1Context += `Entry point: "${pd.entryPoint}"\n`;
+      day1Context += `Voice: ${pd.voice || "peer"} | Pacing: ${pd.pacing || "momentum"} | Task emphasis: ${pd.taskEmphasis || "apply"}\n`;
+    }
+    // Psychological patterns
+    const activePatterns = [
+      cl.isFrustrated           && "Frustrated: has tried multiple approaches but nothing clicked",
+      cl.isAnxietyDriven        && "Anxiety-driven: feeling outpaced, goal is to feel confident",
+      cl.isCredibilityDefender  && "Credibility defender: senior, fears erosion of professional credibility",
+      cl.hasTheoryGap           && "Theory-practice gap: learns but doesn't convert to actual work practice",
+      cl.isHighCommitmentBeginner && "Motivated beginner: hasn't started yet but ready to move",
+      cl.isPureNavigator        && "Pure navigator: wants to understand what's changing for strategic decisions",
+    ].filter(Boolean);
+    if (activePatterns.length > 0) {
+      day1Context += `\nActive psychological patterns:\n${activePatterns.map(p => "• " + p).join("\n")}\n`;
+    }
+  }
 
-  const prompt = `Generate exactly ONE personalized 10-minute career development task for Day ${dayNum + 1} of this person's program.
+  const prompt = `Generate exactly ONE personalized 30-minute career development task for Day ${dayNum + 1} of this person's program.
 
 ═══ FULL QUIZ PROFILE ═══
 Profile: ${profileName}
 Orientation: ${cl.orientation || "balanced"} (optimizer=growth · protector=defend · navigator=lead/understand)
 Readiness: ${cl.readinessLevel || "medium"}
-Role: ${lk(roleNames, answers.role) || "professional"}
+Role: ${lk(roleNames, answers.role) || "professional"}${subRoleText ? ` (${subRoleText})` : ""}
 Seniority: ${lk(seniorityTexts, answers.seniority) || "mid-career"}
-Career situation: ${lk(situTexts, answers.career_situation) || "in career"}
 What's making it urgent: ${lk(urgTexts, answers.urgency) || "not specified"}
-Biggest concern: ${lk(concernTexts, answers.biggest_concern) || lk(blockerTexts, answers.blocker) || "not specified"}
-12-month goal: ${(answers.goal_custom || lk(goalTexts, answers.goal)) || "move forward on something that matters"}
-Main blocker: ${lk(blockerTexts, answers.blocker) || "something gets in the way"}
+Main blocker: ${( normalizeBlocker(answers.blocker).map(b => blockerTexts[b]).filter(Boolean).join("; ") || "not specified")}
 Action vs. understanding: ${stylePref}
-Internal vs. external motivation: ${validPref}
-How they learn best: ${learnStyle || "any format"}
-Already tried (DO NOT repeat): ${alreadyTried}
-Tool familiarity: ${lk(aiTexts, answers.ai_level) || "not specified"}  - background only, do NOT generate AI tool tasks
-${noraInsight ? `\n═══ NORA COACHING INSIGHTS ═══\n${noraInsight}\n` : ""}
+
+═══ GOAL CONTEXT ═══
+12-month goal: ${(answers.goal_custom || lk(goalTexts, answers.goal)) || "move forward on something that matters"}${goalDetailText ? ` (specifically: ${goalDetailText})` : ""}${goalDirection ? `\nTarget direction: ${goalDirection}` : ""}${goalStatementText ? `\nNora-refined goal statement: "${goalStatementText}"` : ""}
+
+═══ THIS WEEK ═══
+Week ${thisWeekNum} focus: "${thisWeekTheme}"
+${noraInsight ? `\n═══ NORA COACHING INSIGHTS ═══\nIf Nora adjusted the goal or identified a priority shift, follow that direction — it's more current than the quiz.\n${noraInsight}\n` : ""}
 ═══ WEEK HISTORY ═══
 ${dayHistory || "No previous days yet."}
 
 ═══ TODAY'S SIGNAL ═══
 ${perfSignal}
-
+${day1Context}
 ═══ RULES ═══
-- One 10-minute task only. Concrete. Doable in a single sitting.
+- One 30-minute task only. Concrete. Doable in a single sitting.
+- CRITICAL: Every task must serve BOTH the 12-month goal AND this week's focus ("${thisWeekTheme}"). If the task doesn't clearly connect to both, rethink it.
 - Career development actions: positioning, skills, visibility, decisions, relationships.
 - HARD RULE: NO AI tool tasks (no ChatGPT, Claude, Copilot, AI drafting).
 - If today was skipped: make tomorrow smaller and lower-friction.
 - If today was done and note shows difficulty: adjust scope down.
 - If today was done and note shows ease or momentum: go one level deeper.
 - Build on previous days  - don't repeat any task already in the history above.
-- Never suggest what they've already tried: ${alreadyTried}
-- Shape steps around how they learn: ${learnStyle || "any format"}
 - Second person. Active voice. Short sentences. No em dashes. No generic motivational language.
 - NEVER include specific years, months, quarters, or dates. Use "currently", "now", "emerging", "increasingly" instead.
 
 Return ONLY valid JSON, no markdown:
-{"tag":"Apply|Read|Reflect|Tool","time":"10 min","title":"...","desc":"...","steps":[2-4 steps depending on time, each a single concrete action],"whyBase":"..."}`;
+{"tag":"Apply|Read|Reflect","time":"30 min","title":"...","desc":"...","steps":[2-4 steps depending on time, each a single concrete action],"whyBase":"..."}`;
 
   try {
     const res = await fetch("/api/generate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "claude-sonnet-4-5-20250929",
+        model: "claude-sonnet-4-20250514",
         max_tokens: 1200,
         messages: [{ role: "user", content: prompt }],
       }),
@@ -4265,18 +4261,20 @@ Return ONLY valid JSON, no markdown:
 
 
 
-// ─── TaskSteps — checkbox list for each day task ──────────────────────────────
-function TaskSteps({ steps, onCheckedChange, initialChecked }) {
+// ─── TaskSteps, checkbox list for each day task ──────────────────────────────
+function TaskSteps({ steps, onCheckedChange, initialChecked, tagBg, tagAccent }) {
   const [checked, setChecked] = React.useState(initialChecked || {});
   if (!steps?.length) return null;
+  const bg = tagBg || T.cream;
+  const accent = tagAccent || T.purple;
   return (
-    <div style={{ background: T.cream, borderRadius: 8, padding: "14px 16px", marginBottom: 14 }}>
+    <div style={{ background: bg, borderRadius: 8, padding: "14px 16px", marginBottom: 14 }}>
       {steps.map((step, si) => (
         <div key={si} onClick={() => { const next = { ...checked, [si]: !checked[si] }; setChecked(next); onCheckedChange && onCheckedChange(next); }}
           style={{ display: "flex", gap: 10, marginBottom: si < steps.length - 1 ? 10 : 0, alignItems: "flex-start", cursor: "pointer" }}>
           <div style={{
-            width: 18, height: 18, borderRadius: 4, border: `2px solid ${checked[si] ? T.purple : T.purpleMid}`,
-            background: checked[si] ? T.purple : "#fff",
+            width: 18, height: 18, borderRadius: 4, border: `2px solid ${checked[si] ? accent : T.purpleMid}`,
+            background: checked[si] ? accent : "#fff",
             display: "flex", alignItems: "center", justifyContent: "center",
             flexShrink: 0, marginTop: 1, transition: "all 0.15s",
           }}>
@@ -4306,10 +4304,8 @@ function NoraChatModal({ plan, onClose, onInsight, dayTasks, dayStatus, dayNotes
   const goalDetailText2 = answers.goal_detail !== undefined ? ((GOAL_DETAIL_QUESTIONS?.[answers.goal])?.options?.[answers.goal_detail]?.text || "") : "";
   const goalDirection = (answers.goal_direction || "").trim();
   const needsDirectionQ = NEEDS_DIRECTION?.[answers.goal]?.includes(answers.goal_detail) && !goalDirection;
-  const roleNames = ["Architecture/built environment","Arts/performance/sport","Content creation","Creative/design","Data/analytics/BI","Education/teaching","Finance/accounting","Founder/entrepreneur","Government/public sector","Healthcare/medicine","HR/people","Legal/compliance","Marketing/growth","Media/journalism/writing","Mental health/social work","Nonprofit/NGO","Nursing/allied health","Operations/strategy","Product/UX/design","Real estate/property","Research/academia","Retail/hospitality","Sales/BD","Skilled trades","Software/engineering","Supply chain/logistics","Training/L&D","Something else"];
+  const roleNames = ROLE_NAMES;
   const roleName = answers.role !== undefined ? roleNames[answers.role] || "professional" : "professional";
-  const situationNames = ["Doing well, but anxious about what's coming","Stuck  - same level too long","Actively looking","In transition","Successful, quietly worried","Doing well  - wants to move faster"];
-  const situation = situationNames[answers.career_situation] || "in career";
 
   // Build the person's own words - day notes, weekly goals they've set
   const personWords = (() => {
@@ -4319,13 +4315,21 @@ function NoraChatModal({ plan, onClose, onInsight, dayTasks, dayStatus, dayNotes
     return [...notes, ...wkGoals];
   })();
 
-  const systemPrompt = `You are Nora, a thoughtful and warm career thinking partner inside Second Act. You genuinely care about this person's progress. You remember what they've said before and gently bring it up when it matters — not to catch them out, but because you're paying attention and you want to help them stay honest with themselves.
+  const systemPrompt = `You are Nora, a thoughtful and warm career thinking partner inside Second Act. You genuinely care about this person's progress. You remember what they've said before and gently bring it up when it matters, not to catch them out, but because you're paying attention and you want to help them stay honest with themselves.
+
+═══ WHO THIS PERSON IS (from their quiz) ═══
+- First name: ${(answers.name || "").trim() || "not given"}
+- Role: ${roleName}${answers.role_detail !== undefined && SUB_ROLE_QUESTIONS[answers.role] ? " (" + (SUB_ROLE_QUESTIONS[answers.role].options[answers.role_detail]?.text || "") + ")" : ""}
+- Seniority: ${["Early career, building foundations","Established, capable and growing","Senior, domain expert, leading or influencing others","Leadership, running a team or function","Executive, setting direction"][answers.seniority] || "not specified"}
+- What's making this feel urgent: ${["AI is changing my field faster than I can keep up","Watched people around me advance while I stayed flat","A layoff or restructure changed things","A review or promotion is on the line","Been drifting, want to stop before it gets harder","Not the role, the field itself — wants out","Keen on exploring new opportunities","None of the above"][answers.urgency] || "not specified"}
+- Main blockers: ${normalizeBlocker(answers.blocker).map(b => ["Not enough time","Too much information, don't know where to start","I start but don't follow through","I learn things but don't apply them","Direction paralysis"][b]).filter(Boolean).join("; ") || "not specified"}
+- Action vs. understanding: ${answers.style_outcome_process != null ? (answers.style_outcome_process < 30 ? "strongly action-oriented — skip context, give the move" : answers.style_outcome_process < 50 ? "action-leaning" : answers.style_outcome_process > 70 ? "strongly understanding-oriented — needs to see the full picture first" : "leans toward understanding") : "balanced"}
 
 ═══ THE PERSON'S COMMITMENTS ═══
-- 12-month goal: "${goalText}"${goalDetailText2 ? ` (${goalDetailText2})` : ""}${goalDirection ? ` — targeting: ${goalDirection}` : ""}
+- 12-month goal: "${goalText}"${goalDetailText2 ? ` (${goalDetailText2})` : ""}${goalDirection ? `, targeting: ${goalDirection}` : ""}
 - Current week focus: "${currentWeekTheme || "building momentum"}"
 ${goalStatement ? `- Program goal statement: "${goalStatement}"` : ""}
-${personWords.length ? `\nTHEIR OWN WORDS (notes they've written, goals they've set):\n${personWords.join("\n")}\n\nThese are things they chose to write down. Use them with care. If what they're saying now doesn't line up with what they wrote before, bring it up gently — not as a gotcha, but as a genuine question. "I noticed you wrote X last week. Does that still feel right, or has something shifted?" This is the value you provide that a journal can't — you remember, and you care enough to ask.` : ""}
+${personWords.length ? `\nTHEIR OWN WORDS (notes they've written, goals they've set):\n${personWords.join("\n")}\n\nThese are things they chose to write down. Use them with care. If what they're saying now doesn't line up with what they wrote before, bring it up gently, not as a gotcha, but as a genuine question. "I noticed you wrote X last week. Does that still feel right, or has something shifted?" This is the value you provide that a journal can't, you remember, and you care enough to ask.` : ""}
 
 ═══ WHAT THEY'VE DONE ═══
 ${(() => {
@@ -4335,21 +4339,43 @@ ${(() => {
   const lines = completed.map(([dayNum]) => {
     const task = dayTasks?.[dayNum];
     const note = dayNotes?.[dayNum];
-    return task ? `Day ${dayNum} ✓: "${task.title}" [${task.tag}]${note ? ` — note: "${note}"` : ""}` : `Day ${dayNum}: done`;
+    return task ? "Day " + dayNum + " ✓: \"" + task.title + "\" [" + task.tag + "]" + (note ? ", note: \"" + note + "\"" : "") : "Day " + dayNum + ": done";
   });
   skipped.forEach(([dayNum]) => { lines.push(`Day ${dayNum} ✗: SKIPPED`); });
   return lines.join("\n");
 })()}
 
+═══ WHERE THEY ARE RIGHT NOW ═══
+They are currently on Day ${currentDay} of 56.
+${(() => {
+  const todayTask = dayTasks?.[currentDay];
+  const prevDay = currentDay - 1;
+  const prevStatus = prevDay > 0 ? (dayStatus?.[prevDay] || "not started") : null;
+  const prevTask = prevDay > 0 ? dayTasks?.[prevDay] : null;
+  const lines = [];
+  if (todayTask) {
+    lines.push("Today's task (Day " + currentDay + "): \"" + todayTask.title + "\" [" + todayTask.tag + "] — not yet completed.");
+    if (todayTask.desc) lines.push("Task description: " + todayTask.desc);
+    if (todayTask.steps?.length) lines.push("Steps: " + todayTask.steps.map((s, i) => (i + 1) + ". " + s).join(" | "));
+    if (todayTask.whyBase) lines.push("Why this task matters: " + todayTask.whyBase);
+  } else {
+    lines.push("Today's task (Day " + currentDay + "): not yet generated.");
+  }
+  if (prevDay > 0 && prevStatus === "done" && prevTask) lines.push("IMPORTANT: They completed Day " + prevDay + " (\"" + prevTask.title + "\") — this is confirmed, do NOT say they haven't done it.");
+  else if (prevDay > 0 && prevStatus === "skipped") lines.push("Day " + prevDay + " was skipped.");
+  else if (prevDay > 0) lines.push("Day " + prevDay + " is pending.");
+  return lines.join("\n");
+})()}
+
 ═══ WHAT YOU KNOW ABOUT THEM ═══
+- Name: ${(answers.name || "").trim() || "not given"} (use their name naturally, but not in every message)
 - Profile: ${plan.profileName}
 - Role: ${roleName}
-- Career situation: ${situation}
 - Momentum score: ${momentumScore ?? "not yet"}/100 (${momentumLabel ?? "early days"})
 - Orientation: ${cl.orientation || "balanced"}
 - Readiness: ${cl.readinessLevel || "medium"}
-- Frustrated pattern: ${cl.isFrustrated ? "yes — they've tried things before and nothing stuck" : "no"}
-- Theory-practice gap: ${cl.hasTheoryGap ? "yes — they learn but don't apply" : "no"}
+- Frustrated pattern: ${cl.isFrustrated ? "yes, they've tried things before and nothing stuck" : "no"}
+- Theory-practice gap: ${cl.hasTheoryGap ? "yes, they learn but don't apply" : "no"}
 ${noraSessionLog?.length ? `
 ═══ PAST CONVERSATIONS WITH THEM ═══
 ${noraSessionLog.map((s, i) => `Session ${i + 1} (Day ${s.dayNum}): ${s.summary}${s.changes?.length ? ` Changes made: ${s.changes.join(", ")}.` : ""}`).join("\n")}
@@ -4362,34 +4388,46 @@ This is your memory. Use it naturally and with kindness:
 
 ═══ YOUR CORE JOB: HONEST, KIND ACCOUNTABILITY ═══
 
-You are the accountability layer a paper journal can't provide. Your value is connecting what they said yesterday to what they're doing today — and doing it with genuine warmth. You're on their side. You notice things because you care, not because you're keeping score.
+You are the accountability layer a paper journal can't provide. Your value is connecting what they said yesterday to what they're doing today, and doing it with genuine warmth. You're on their side. You notice things because you care, not because you're keeping score.
 
 1. GOAL ALIGNMENT: If their weekly focus and their actions don't match, raise it as a question, not a verdict. "Your week focus is [X], but it looks like you've been spending time on [Y]. I wonder if the focus needs updating, or if there's something about [X] that feels harder to start?"
 
 2. COMMITMENT TRACKING: If they wrote a note about something they wanted to do and haven't yet, bring it up gently. "You wrote a note about wanting to [X]. That seemed important to you. Is it still on your mind?"
 
-3. NOTICING CONTRADICTIONS: If what they're saying now doesn't match something from before, name it with curiosity, not judgment. "A couple sessions ago you mentioned [Z] was the priority. Today it sounds like [W] is pulling your attention. I want to make sure we're building toward the right thing — which one matters more right now?"
+3. NOTICING CONTRADICTIONS: If what they're saying now doesn't match something from before, name it with curiosity, not judgment. "A couple sessions ago you mentioned [Z] was the priority. Today it sounds like [W] is pulling your attention. I want to make sure we're building toward the right thing, which one matters more right now?"
 
-4. PATTERN NOTICING: If you see a pattern (repeated skipping, frequent goal changes, avoiding certain task types), name it honestly but kindly. "I've noticed the Reflect tasks tend to get skipped. No judgment — but I'm curious if there's something about those that doesn't land for you."
+4. PATTERN NOTICING: If you see a pattern (repeated skipping, frequent goal changes, avoiding certain task types), name it honestly but kindly. "I've noticed the Reflect tasks tend to get skipped. No judgment, but I'm curious if there's something about those that doesn't land for you."
 
 5. HELPING SHARPEN GOALS: If they suggest a weekly focus or goal that's vague or not well connected to their 12-month target, help them make it stronger instead of just accepting it. "That's a starting point. Can we make it more specific? What would it look like if you really nailed that this week?" Or: "How does that connect to your bigger goal of [X]?"
 
-6. WEEKLY GOAL EDITING: They can edit their weekly focus. If they want to change it, help them sharpen it first — then use CMD:WEEK_GOAL to set it. Gently probe weak ones: "I want to make sure this is the right focus. What would be different at the end of this week if you got this right?"
+6. WEEKLY GOAL EDITING: They can edit their weekly focus. If they want to change it, help them sharpen it first, then use CMD:WEEK_GOAL to set it. Gently probe weak ones: "I want to make sure this is the right focus. What would be different at the end of this week if you got this right?"
 
-The tone is warm and direct — like a good friend who's genuinely invested in your progress. You say the honest thing, but you say it like someone who's rooting for them. Never sarcastic. Never condescending. Never "gotcha." Just caring and clear.
+The tone is warm and direct, like a good friend who's genuinely invested in your progress. You say the honest thing, but you say it like someone who's rooting for them. Never sarcastic. Never condescending. Never "gotcha." Just caring and clear.
 
 ═══ RESPONSE STYLE ═══
 - 2-3 sentences default. Go slightly longer only when wrapping up.
 - One question at a time.
-- No hollow affirmations ("Great!", "Absolutely!", "That's a great insight!"). But do acknowledge when something lands — briefly and sincerely. "That's honest" or "That makes sense" is fine.
+- No hollow affirmations ("Great!", "Absolutely!", "That's a great insight!"). But do acknowledge when something lands, briefly and sincerely. "That's honest" or "That makes sense" is fine.
 - When they share something vulnerable or real, honor it. A simple "Thank you for saying that" or "That takes some honesty" goes a long way. Then build on it.
 - Second person. Contractions. Short sentences. No em dashes.
 - Be warm. You like this person. You want them to succeed.
 
 ═══ ENDING ═══
-ENDING EARLY: If the conversation feels like it's run its course — they're repeating themselves or there's nothing more to usefully explore — wrap it up warmly. "I think we've covered good ground today." Include NORA_DONE on a new line.
+You have up to 30 exchanges, but you do NOT need to use them all. End the conversation when:
+- You've covered meaningful ground and continuing would be circular
+- The person seems satisfied or ready to move on
+- The same themes keep coming up without new insight
+- You've reached a natural conclusion
 
-CLOSING: Never end abruptly. Write one sentence that leaves them with something encouraging and concrete — something that connects back to what they shared. NORA_DONE goes after your closing message.
+EARLY EXIT: If the conversation becomes circular (repeating themes, short non-committal replies, no new ground), wrap it up warmly. Don't force more exchanges.
+
+WARM CLOSING (REQUIRED): You must NEVER end a conversation abruptly. Every closing must:
+1. Thank them sincerely for the exchange ("Thanks for talking this through with me" or similar, in your own words)
+2. If the conversation covered significant ground, briefly summarise the 2-3 key takeaways before closing
+3. Leave them with one concrete, encouraging thing to carry into their day
+4. Place NORA_DONE on a new line after your closing message
+
+POST-CONVERSATION TASK REVIEW: Before writing NORA_DONE, evaluate whether anything discussed should change their program. If their goals shifted, their weekly focus no longer fits, or tomorrow's task doesn't match what came up, include the relevant CMD (see PROGRAM CHANGES below). After any CMD, confirm the change naturally in your closing: "I've adjusted tomorrow's task based on what we talked about" or "I've updated your weekly focus to reflect where your head is now."
 
 ═══ PROGRAM CHANGES ═══
 Execute immediately when the person asks, OR when the conversation reveals their program needs reshaping. Include the command on its own line:
@@ -4402,26 +4440,28 @@ Execute immediately when the person asks, OR when the conversation reveals their
 - Rebuild the entire current week: CMD:REBUILD_WEEK (when goal or direction has significantly shifted)
 - Slower pace: CMD:SLOW_DOWN
 
-WHEN TO PROACTIVELY SUGGEST CHANGES: Don't wait to be asked. If the conversation reveals their actual goal is different from the program — say so and offer to update. If their weekly focus doesn't match their actions — propose a change. If their 12-month target is more specific than what they picked, use CMD:CHANGE_GOAL_CUSTOM. If a task isn't working — replace it immediately.
+WHEN TO PROACTIVELY SUGGEST CHANGES: Don't wait to be asked. If the conversation reveals their actual goal is different from the program, say so and offer to update. If their weekly focus doesn't match their actions, propose a change. If their 12-month target is more specific than what they picked, use CMD:CHANGE_GOAL_CUSTOM. If a task isn't working, replace it immediately.
 
-If they want to make a change that doesn't quite add up, gently check in first: "Just want to make sure — last time you said [X] was the priority. If we shift to [Y], we'd be moving away from that. Does that feel right to you?"
+If they want to make a change that doesn't quite add up, gently check in first: "Just want to make sure, last time you said [X] was the priority. If we shift to [Y], we'd be moving away from that. Does that feel right to you?"
 
-Commands are parsed silently — confirm the change in natural language but don't reference the command syntax.
+Commands are parsed silently, confirm the change in natural language but don't reference the command syntax.
 
 ${isGoalClarification
-  ? `GOAL CLARIFICATION SESSION: This is their first time on the dashboard. Your job is to make sure the program is built around what they actually want — not just what they picked in the quiz. Open warmly by acknowledging their quiz goal ("You said you want to [goal]") and asking one thoughtful question that probes whether that's the real thing — what's actually driving it, what specifically they're trying to change, or what they'd want to look back on in 12 months. If what they say is more specific or different from their quiz answer, use CMD:CHANGE_GOAL_CUSTOM or CMD:CHANGE_GOAL to update it immediately. If their goal is confirmed, end by noting the program is well-aligned and wish them well with Day 1. Keep it tight — 3-4 exchanges, not an intake interview.`
+  ? `GOAL CLARIFICATION SESSION: This is their first time on the dashboard. Your job is to make sure the program is built around what they actually want, not just what they picked in the quiz. Open warmly by acknowledging their quiz goal ("You said you want to [goal]") and asking one thoughtful question that probes whether that's the real thing, what's actually driving it, what specifically they're trying to change, or what they'd want to look back on in 12 months. If what they say is more specific or different from their quiz answer, use CMD:CHANGE_GOAL_CUSTOM or CMD:CHANGE_GOAL to update it immediately. If their goal is confirmed, end by noting the program is well-aligned and wish them well with Day 1. Keep it tight, 3-4 exchanges, not an intake interview.`
   : needsDirectionQ
   ? "They want to move into a different field or start something of their own but haven't said where. Open with a warm, curious question asking what direction they're considering."
   : "Open with a single specific question that shows you've been paying attention. Good openers: reference something they wrote in a day note, gently ask about a skipped task, check whether their weekly focus still feels right, or ask what's on their mind today. Don't open with a generic 'how are things going'."}`;
 
   // Kick off with Nora's opening question
   useEffect(() => {
+    const controller = new AbortController();
     const open = async () => {
       setLoading(true);
       try {
         const res = await fetch("/api/generate", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
+          signal: controller.signal,
           body: JSON.stringify({
             model: "claude-haiku-4-5-20251001",
             max_tokens: 300,
@@ -4433,18 +4473,19 @@ ${isGoalClarification
         const text = (data.content || []).map(b => b.text || "").join("").replace("NORA_DONE", "").trim();
         setMessages([{ role: "assistant", content: text }]);
       } catch (e) {
-        setMessages([{ role: "assistant", content: "Let me ask you something specific. What's the one thing about your current situation that feels most stuck right now?" }]);
+        if (e.name !== 'AbortError') setMessages([{ role: "assistant", content: "Let me ask you something specific. What's the one thing about your current situation that feels most stuck right now?" }]);
       }
       setLoading(false);
     };
     open();
+    return () => controller.abort();
   }, []);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, loading]);
 
-  const MAX_EXCHANGES = 7;
+  const MAX_EXCHANGES = 30;
 
   const send = async () => {
     if (!input.trim() || loading) return;
@@ -4456,25 +4497,23 @@ ${isGoalClarification
 
     // Count how many user turns have happened (including this one)
     const userTurnCount = updated.filter(m => m.role === "user").length;
-    const isSecondToLast = userTurnCount === MAX_EXCHANGES - 1;
+    const isNearEnd = userTurnCount >= MAX_EXCHANGES - 2;
     const isLast = userTurnCount >= MAX_EXCHANGES;
 
-    // Detect circular conversation — last 4 messages very similar in length/content
+    // Detect circular conversation: last 3 user messages very similar or short non-committal
     const recentUser = updated.filter(m => m.role === "user").slice(-3).map(m => m.content.toLowerCase().trim());
     const isCircular = recentUser.length >= 3 && (
-      // Short non-committal replies repeated: "i don't know", "maybe", "not sure", "ok"
       recentUser.every(m => m.length < 25) ||
-      // Near-identical consecutive messages
       (recentUser[0] === recentUser[1] || recentUser[1] === recentUser[2])
     );
 
     // Build the system prompt, appending signals when appropriate
     const promptWithSignal = isCircular
-      ? systemPrompt + "\n\nNOTE: This conversation has stalled. Write ONE warm closing sentence — give them something concrete to carry into today — then on the very next line write NORA_DONE. Do not ask another question. Do not explain why you're closing."
-      : isSecondToLast
-      ? systemPrompt + "\n\nNOTE: You have one exchange left after this. Respond to what they said, then in the same message begin wrapping up — one forward-looking observation that sets up a clean close next turn. No new questions."
+      ? systemPrompt + "\n\nNOTE: This conversation has become circular. It's time to close. Thank them warmly for the exchange, summarise any key takeaways if there were any, give them one concrete thing to carry forward, then write NORA_DONE on a new line. Before NORA_DONE, evaluate whether any CMDs should be issued based on what was discussed. Do not ask another question."
       : isLast
-      ? systemPrompt + "\n\nNOTE: This is your final message. Write 2-3 sentences: acknowledge what came out of this conversation, give them one clear thing to carry into their day, and close warmly. Then on a new line write NORA_DONE. No questions. No \"feel free to reach out\" filler."
+      ? systemPrompt + "\n\nNOTE: This is your final message. Thank them warmly for the exchange. If the conversation covered significant ground, briefly summarise 2-3 key takeaways. Give them one clear, concrete thing to carry into their day. Before writing NORA_DONE, evaluate whether any program changes (CMDs) should be issued based on what was discussed. Then write NORA_DONE on a new line. No questions."
+      : isNearEnd
+      ? systemPrompt + "\n\nNOTE: You're approaching the end of this conversation. Begin wrapping up naturally. Respond to what they said, then start moving toward a warm close. If there's significant ground to summarise, begin doing so."
       : systemPrompt;
 
     try {
@@ -4483,7 +4522,7 @@ ${isGoalClarification
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           model: "claude-haiku-4-5-20251001",
-          max_tokens: 250,
+          max_tokens: 400,
           system: promptWithSignal,
           messages: updated,
         }),
@@ -4581,7 +4620,7 @@ ${isGoalClarification
           <div ref={bottomRef} />
         </div>
 
-        {/* Input — blocked when done */}
+        {/* Input, blocked when done */}
         {done ? (
           <div style={{ padding: "16px 20px", borderTop: `1px solid ${T.border}`, flexShrink: 0, textAlign: "center" }}>
             <p style={{ fontFamily: T.sans, fontSize: 13, color: T.muted, margin: "0 0 12px", lineHeight: 1.55 }}>
@@ -4599,7 +4638,7 @@ ${isGoalClarification
                 value={input}
                 onChange={e => setInput(e.target.value)}
                 onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
-                placeholder="Ask Nora anything — task, goal, pace..."
+                placeholder="Ask Nora anything, task, goal, pace..."
                 rows={2}
                 style={{ flex: 1, padding: "10px 14px", border: `1px solid ${T.border}`, borderRadius: 10, fontFamily: T.sans, fontSize: 14, color: T.black, lineHeight: 1.55, outline: "none", resize: "none", boxSizing: "border-box", background: "#fff" }}
               />
@@ -4609,7 +4648,7 @@ ${isGoalClarification
               </button>
             </div>
             <p style={{ fontFamily: T.sans, fontSize: 11, color: T.muted, margin: "8px 0 0" }}>Ask Nora to brainstorm with you, change tomorrow's task, adjust your weekly focus, or shift your goal</p>
-            {messages.filter(m => m.role === "user").length >= 7 && (
+            {messages.filter(m => m.role === "user").length >= 25 && (
               <p style={{ fontFamily: T.sans, fontSize: 10, color: T.muted, margin: "4px 0 0", opacity: 0.5 }}>
                 {MAX_EXCHANGES - messages.filter(m => m.role === "user").length} exchange{MAX_EXCHANGES - messages.filter(m => m.role === "user").length === 1 ? "" : "s"} left in this conversation
               </p>
@@ -4628,8 +4667,16 @@ ${isGoalClarification
 async function generateGoalStatement(plan, dayTasks, dayStatus, dayNotes) {
   const answers = plan._answers || {};
   const goalTexts = GOAL_TEXTS;
-  const roleNames = ["Architecture/built environment","Arts/performance/sport","Content creation","Creative/design","Data/analytics/BI","Education/teaching","Finance/accounting","Founder/entrepreneur","Government/public sector","Healthcare/medicine","HR/people","Legal/compliance","Marketing/growth","Media/journalism/writing","Mental health/social work","Nonprofit/NGO","Nursing/allied health","Operations/strategy","Product/UX/design","Real estate/property","Research/academia","Retail/hospitality","Sales/BD","Skilled trades","Software/engineering","Supply chain/logistics","Training/L&D","Something else"];
-  const lk = (arr, idx) => (idx !== undefined && idx >= 0) ? arr[idx] || null : null;
+  const roleNames = ROLE_NAMES;
+
+  const subRoleText = answers.role_detail !== undefined && SUB_ROLE_QUESTIONS[answers.role]
+    ? SUB_ROLE_QUESTIONS[answers.role].options[answers.role_detail]?.text || ""
+    : "";
+  const goalDetailText = answers.goal_detail !== undefined ? ((GOAL_DETAIL_QUESTIONS[answers.goal])?.options?.[answers.goal_detail]?.text || "") : "";
+  const goalDirection = (answers.goal_direction || "").trim();
+  const arc = plan.weekArc || {};
+  const currentWeekNum = Math.min(8, Math.ceil((Object.values(dayStatus).filter(s => s === 'done').length + 1) / 7));
+  const currentWeekTheme = [arc.w1, arc.w2, arc.w3, arc.w4, arc.w5, arc.w6, arc.w7, arc.w8][currentWeekNum - 1] || "building momentum";
 
   const doneDays = Object.entries(dayStatus).filter(([,s]) => s === 'done').length;
   const recentNotes = Object.entries(dayNotes)
@@ -4641,11 +4688,13 @@ async function generateGoalStatement(plan, dayTasks, dayStatus, dayNotes) {
     .slice(-3)
     .map(([, t]) => t?.title).filter(Boolean).join(', ');
 
-  const prompt = `Write a single short goal statement (8–14 words) for this professional's career program. It should feel personal and specific — not generic.
+  const prompt = `Write a single short goal statement (8–14 words) for this professional's career program. It should feel personal and specific, not generic.
 
 Profile: ${plan.profileName}
-Role: ${lk(roleNames, answers.role) || "professional"}
-12-month goal: ${(answers.goal_custom || lk(goalTexts, answers.goal)) || "move forward"}
+Role: ${lk(roleNames, answers.role) || "professional"}${subRoleText ? ` (${subRoleText})` : ""}
+Seniority: ${SENIORITY_TEXTS[answers.seniority] || "mid-career"}
+12-month goal: ${(answers.goal_custom || lk(goalTexts, answers.goal)) || "move forward"}${goalDetailText ? ` (${goalDetailText})` : ""}${goalDirection ? `\nTarget direction: ${goalDirection}` : ""}
+Current week focus: "${currentWeekTheme}"
 Days completed: ${doneDays}
 Recent tasks done: ${recentTasks || "none yet"}
 Recent notes: ${recentNotes || "none yet"}
@@ -4665,7 +4714,7 @@ Return ONLY the statement, nothing else.`;
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "claude-sonnet-4-5-20250929",
+        model: "claude-sonnet-4-20250514",
         max_tokens: 60,
         messages: [{ role: "user", content: prompt }],
       }),
@@ -4693,8 +4742,23 @@ function WeeklyCheckInModal({ plan, completedWeek, weekTasks, weekNotes, weekSta
 
   const goalTexts = GOAL_TEXTS;
   const goalText = (answers.goal_custom || goalTexts[answers.goal]) || "move forward";
-  const roleNames = ["Architecture/built environment","Arts/performance/sport","Content creation","Creative/design","Data/analytics/BI","Education/teaching","Finance/accounting","Founder/entrepreneur","Government/public sector","Healthcare/medicine","HR/people","Legal/compliance","Marketing/growth","Media/journalism/writing","Mental health/social work","Nonprofit/NGO","Nursing/allied health","Operations/strategy","Product/UX/design","Real estate/property","Research/academia","Retail/hospitality","Sales/BD","Skilled trades","Software/engineering","Supply chain/logistics","Training/L&D","Something else"];
+  const roleNames = ROLE_NAMES;
   const roleName = answers.role !== undefined ? roleNames[answers.role] || "professional" : "professional";
+  const subRoleText = answers.role_detail !== undefined && SUB_ROLE_QUESTIONS[answers.role]
+    ? SUB_ROLE_QUESTIONS[answers.role].options[answers.role_detail]?.text || ""
+    : "";
+  const goalDetailText = answers.goal_detail !== undefined ? ((GOAL_DETAIL_QUESTIONS[answers.goal])?.options?.[answers.goal_detail]?.text || "") : "";
+  const goalDirection = (answers.goal_direction || "").trim();
+  const goalStatementText = plan._goalStatement || "";
+  const stylePref = answers.style_outcome_process != null
+    ? (answers.style_outcome_process < 30 ? "strongly action-oriented"
+      : answers.style_outcome_process < 50 ? "action-leaning"
+      : answers.style_outcome_process > 70 ? "strongly understanding-oriented"
+      : "understanding-leaning") : "balanced";
+  const arc = plan.weekArc || {};
+  const weekThemes = [arc.w1, arc.w2, arc.w3, arc.w4, arc.w5, arc.w6, arc.w7, arc.w8];
+  const thisWeekTheme = weekThemes[completedWeek - 1] || "building momentum";
+  const nextWeekTheme = weekThemes[completedWeek] || null;
 
   // Summarise the week for the prompt
   const weekSummary = Array.from({ length: 7 }, (_, i) => {
@@ -4707,16 +4771,25 @@ function WeeklyCheckInModal({ plan, completedWeek, weekTasks, weekNotes, weekSta
 
   const doneCount = Array.from({ length: 7 }, (_, i) => (completedWeek - 1) * 7 + i + 1).filter(d => (weekStatus || {})[d] === 'done').length;
 
-  const systemPrompt = `You are Nora, a sharp career coach inside Second Act. You are doing a brief weekly check-in with someone who just finished Week ${completedWeek} of their 8-week career program.
+  const systemPrompt = `You are Nora, a sharp career coach inside Second Act. You are doing a brief weekly check-in with someone who just finished Week ${completedWeek} of their career development program.
 
-THEIR WEEK ${completedWeek} SUMMARY:
-${weekSummary}
-
-Completed: ${doneCount}/7 days
-Current 12-month goal: "${goalText}"
+═══ WHO THIS PERSON IS ═══
 Profile: ${plan.profileName}
-Role: ${roleName}
+Role: ${roleName}${subRoleText ? ` (${subRoleText})` : ""}
+Seniority: ${SENIORITY_TEXTS[answers.seniority] || "mid-career"}
 Orientation: ${cl.orientation || "balanced"}
+Approach: ${stylePref}
+What's making this feel urgent: ${URG_TEXTS[answers.urgency] || "not specified"}
+Main blockers: ${normalizeBlocker(answers.blocker).map(b => BLOCKER_TEXTS[b]).filter(Boolean).join("; ") || "not specified"}
+
+═══ THEIR GOAL ═══
+12-month goal: "${goalText}"${goalDetailText ? ` (specifically: ${goalDetailText})` : ""}${goalDirection ? `\nTarget direction: ${goalDirection}` : ""}${goalStatementText ? `\nNora-refined goal statement: "${goalStatementText}"` : ""}
+
+═══ WEEK ${completedWeek} ═══
+Theme: "${thisWeekTheme}"
+${weekSummary}
+Completed: ${doneCount}/7 days
+${nextWeekTheme ? `\nPlanned Week ${completedWeek + 1} theme: "${nextWeekTheme}"` : ""}
 
 YOUR JOB: In exactly 2–3 exchanges, find out:
 1. What actually landed or surprised them this week
@@ -4728,8 +4801,8 @@ Then produce a brief insight summary (2–4 sentences) that will shape their Wee
 RULES:
 - One question at a time. Never two.
 - Don't repeat what they said. Don't affirm ("Great!", "That's amazing!").
-- Be direct and specific. Read the week data before asking — don't ask things you already know.
-- If ${doneCount} < 4, acknowledge that directly and ask what got in the way — don't skip it.
+- Be direct and specific. Read the week data before asking, don't ask things you already know.
+- If ${doneCount} < 4, acknowledge that directly and ask what got in the way, don't skip it.
 - After 2–3 exchanges, close with a short insight summary, then say "NORA_DONE" on its own line.
 - If their goal has clearly shifted, include "CMD:CHANGE_GOAL:N" (N = 0–4, same scale as before).
 - If the week focus should change, include "CMD:WEEK_GOAL:short 4–7 word theme".
@@ -4796,7 +4869,7 @@ START: Open with one specific, direct question based on what you see in their we
         onComplete && onComplete(cleanText, cmds);
       }
     } catch {
-      setMessages(prev => [...prev, { role: "assistant", content: "Something went wrong — try again." }]);
+      setMessages(prev => [...prev, { role: "assistant", content: "Something went wrong, try again." }]);
     }
     setLoading(false);
   };
@@ -4868,14 +4941,13 @@ START: Open with one specific, direct question based on what you see in their we
 }
 
 
-// ─── MomentumArc — extracted to respect hooks rules ──────────────────────────
-function MomentumArc({ momentumScore, momentumLabel }) {
+// ─── MomentumArc, extracted to respect hooks rules ──────────────────────────
+const MomentumArc = React.memo(function MomentumArc({ momentumScore, momentumLabel }) {
   const [displayScore, setDisplayScore] = useState(0);
   useEffect(() => {
     const t = setTimeout(() => setDisplayScore(momentumScore), 300);
     return () => clearTimeout(t);
-  }, []);
-  useEffect(() => { setDisplayScore(momentumScore); }, [momentumScore]);
+  }, [momentumScore]);
   const arcColor = displayScore >= 80 ? "#5DCAA5" : displayScore >= 60 ? "#A78BFA" : displayScore >= 40 ? "#818CF8" : "rgba(255,255,255,0.4)";
   return (
     <div style={{ position: "relative", width: 80, height: 80, flexShrink: 0 }}>
@@ -4891,9 +4963,9 @@ function MomentumArc({ momentumScore, momentumLabel }) {
       </div>
     </div>
   );
-}
+});
 
-// ─── DayNoteField — extracted to respect hooks rules ─────────────────────────
+// ─── DayNoteField, extracted to respect hooks rules ─────────────────────────
 function DayNoteField({ dayNum, dayNotes, setDayNotes }) {
   const saved = dayNotes[dayNum] || "";
   const [draft, setDraft] = useState(saved);
@@ -4966,9 +5038,66 @@ function DayNoteField({ dayNum, dayNotes, setDayNotes }) {
   );
 }
 
-function DashboardScreen({ plan, onBack, startDate }) {
+// ─── Mail share button — email task to a friend ──────────
+function MailShareButton({ task }) {
+  const [hovered, setHovered] = React.useState(false);
+  if (!task) return null;
+  const subject = encodeURIComponent("Working on this today — want to think it through?");
+  const body = encodeURIComponent(
+    "Hey, I'm working through a career development program and today's task is:\n\n" +
+    task.title + "\n\n" +
+    (task.desc || "") + "\n\n" +
+    (task.steps?.length ? "Steps:\n" + task.steps.map((s, i) => (i + 1) + ". " + s).join("\n") + "\n\n" : "") +
+    "Would be good to talk it through if you have 10 minutes."
+  );
+  return (
+    <div style={{ position: "relative", display: "inline-block" }}>
+      <a
+        href={"mailto:?subject=" + subject + "&body=" + body}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+        style={{
+          display: "flex", alignItems: "center", justifyContent: "center",
+          width: 32, height: 32, borderRadius: 8,
+          background: hovered ? T.purpleMid : "transparent",
+          border: "1px solid " + (hovered ? T.purple : T.purpleMid),
+          cursor: "pointer", textDecoration: "none",
+          transition: "background 0.15s, border-color 0.15s",
+        }}>
+        <svg width="15" height="12" viewBox="0 0 15 12" fill="none">
+          <rect x="0.75" y="0.75" width="13.5" height="10.5" rx="1.5" stroke={T.purpleD} strokeWidth="1.2" />
+          <path d="M1 1.5L7.5 7L14 1.5" stroke={T.purpleD} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </a>
+      {hovered && (
+        <div style={{
+          position: "absolute", bottom: "calc(100% + 6px)", left: "50%",
+          transform: "translateX(-50%)",
+          background: T.black, color: "#fff",
+          fontFamily: T.sans, fontSize: 11, fontWeight: 500,
+          padding: "5px 10px", borderRadius: 6, whiteSpace: "nowrap",
+          pointerEvents: "none", zIndex: 10,
+          boxShadow: "0 2px 8px rgba(0,0,0,0.2)",
+        }}>
+          Brainstorm this task with a friend
+          <div style={{
+            position: "absolute", top: "100%", left: "50%", transform: "translateX(-50%)",
+            width: 0, height: 0,
+            borderLeft: "5px solid transparent", borderRight: "5px solid transparent",
+            borderTop: "5px solid " + T.black,
+          }} />
+        </div>
+      )}
+    </div>
+  );
+}
 
-  // ── Storage key — unique per user profile ──────────────
+function DashboardScreen({ plan: initialPlan, onBack, startDate }) {
+
+  // Local mutable copy of plan so we never mutate the parent's prop
+  const [plan, setPlanState] = useState(initialPlan);
+
+  // ── Storage key, unique per user profile ──────────────
   const storageKey = buildDashStorageKey(plan);
 
   // ── State: initialized with defaults, hydrated async from storage ──
@@ -4982,13 +5111,18 @@ function DashboardScreen({ plan, onBack, startDate }) {
   const [dayNotes, setDayNotes] = useState({});
   // generating: which day is currently being generated
   const [generating, setGenerating] = useState(null);
+  const [dailyTimeAvailable, setDailyTimeAvailable] = useState("30 min");
+  const [dailyTimeGenerating, setDailyTimeGenerating] = useState(false);
   const [showCelebration, setShowCelebration] = useState({});
+  const [celebrationModal, setCelebrationModal] = useState(null); // {dayNum, earned, crossedMilestone?}
+  const [credsMilestoneModal, setCredsMilestoneModal] = useState(null); // {tier, copy, total}
   const [achievementToasts, setAchievementToasts] = useState([]);
   const [showGoalEdit, setShowGoalEdit] = useState(false);
   const [goalUpdatedDay, setGoalUpdatedDay] = useState(null);
   const [goalUpdating, setGoalUpdating] = useState(false);
   const [paceSlow, setPaceSlow] = useState(false);
   const [weekGoalOverride, setWeekGoalOverride] = useState(null);
+  const [adaptedWeekThemes, setAdaptedWeekThemes] = useState({}); // {weekNum: "adapted theme"}
   const [goalStatement, setGoalStatement] = useState("");
   const [arcOpen, setArcOpen] = useState(false);
   const [checkedSteps, setCheckedSteps] = useState({});
@@ -4996,6 +5130,7 @@ function DashboardScreen({ plan, onBack, startDate }) {
   const [noraOpen, setNoraOpen] = useState(false);
   const [noraInsight, setNoraInsight] = useState(null);
   const [noraDismissed, setNoraDismissed] = useState(false);
+  const [nudgeDismissed, setNudgeDismissed] = useState(false);
   const [noraGoalClarification, setNoraGoalClarification] = useState(false); // first-session goal mode
   const [noraMomentumBonus, setNoraMomentumBonus] = useState(0);
   const [noraChangeMade, setNoraChangeMade] = useState(false);
@@ -5012,6 +5147,18 @@ function DashboardScreen({ plan, onBack, startDate }) {
   const [progressOpen, setProgressOpen] = useState(false);
   const [headerWeekEdit, setHeaderWeekEdit] = useState(false);
   const [headerWeekDraft, setHeaderWeekDraft] = useState("");
+  const [cashPot, setCashPot] = useState(0);
+  const [cashAnimations, setCashAnimations] = useState([]); // [{id, amount}]
+  const [showCredsLog, setShowCredsLog] = useState(false);
+  const [dailyQuotes, setDailyQuotes] = useState({}); // {dayNum: {text, author}}
+  const [paywallOpen, setPaywallOpen] = useState(false);
+  const [paywallBypassed, setPaywallBypassed] = useState(false);
+
+  // Reset time picker when active day changes
+  useEffect(() => {
+    setDailyTimeAvailable("30 min");
+    setDailyTimeGenerating(false);
+  }, [activeDay]); // eslint-disable-line
 
   // ── Load persisted state once on mount (async) ───────────────
   useEffect(() => {
@@ -5025,6 +5172,7 @@ function DashboardScreen({ plan, onBack, startDate }) {
         if (saved.goalUpdatedDay) setGoalUpdatedDay(saved.goalUpdatedDay);
         if (saved.paceSlow) setPaceSlow(saved.paceSlow);
         if (saved.weekGoalOverride) setWeekGoalOverride(saved.weekGoalOverride);
+        if (saved.adaptedWeekThemes) setAdaptedWeekThemes(saved.adaptedWeekThemes);
         if (saved.goalStatement) setGoalStatement(saved.goalStatement);
         if (saved.checkedSteps) setCheckedSteps(saved.checkedSteps);
         if (saved.noraInsight) setNoraInsight(saved.noraInsight);
@@ -5036,6 +5184,8 @@ function DashboardScreen({ plan, onBack, startDate }) {
         if (saved.weeklyCheckInDone) setWeeklyCheckInDone(saved.weeklyCheckInDone);
         if (saved.weekFocusInput) setWeekFocusInput(saved.weekFocusInput);
         if (saved.customGoalInput) setCustomGoalInput(saved.customGoalInput);
+        if (saved.cashPot != null) setCashPot(saved.cashPot);
+        if (saved.paywallBypassed) setPaywallBypassed(saved.paywallBypassed);
       }
       setStorageLoaded(true);
     })();
@@ -5054,25 +5204,18 @@ function DashboardScreen({ plan, onBack, startDate }) {
     saveTimerRef.current = setTimeout(() => {
       Store.set(storageKey, {
         activeDay, dayTasks, dayStatus, dayNotes,
-        goalUpdatedDay, paceSlow, weekGoalOverride, goalStatement,
+        goalUpdatedDay, paceSlow, weekGoalOverride, adaptedWeekThemes, goalStatement,
         checkedSteps, noraInsight, noraDismissed, noraMomentumBonus,
         noraChangeMade, noraPickDay, noraSessionLog,
-        weeklyCheckInDone, weekFocusInput, customGoalInput,
+        weeklyCheckInDone, weekFocusInput, customGoalInput, cashPot,
+        paywallBypassed,
       });
       // Also update the plan's resume metadata so landing page stays current
       (async () => {
         try {
           const existing = await Store.get(PLAN_STORAGE_KEY) || {};
           const doneCount = Object.values(dayStatus).filter(s => s === 'done').length;
-          const sc = (() => {
-            let s = 0, skipsUsed = 0;
-            for (let d = 1; d <= 56; d++) {
-              if (dayStatus[d] === 'done') s++;
-              else if (dayStatus[d] === 'skipped' && skipsUsed === 0) skipsUsed++;
-              else break;
-            }
-            return s;
-          })();
+          const sc = calcStreak(dayStatus);
           Store.set(PLAN_STORAGE_KEY, {
             ...existing,
             _resumeDay: doneCount + 1,
@@ -5085,27 +5228,26 @@ function DashboardScreen({ plan, onBack, startDate }) {
   }, [
     storageLoaded,
     activeDay, dayTasks, dayStatus, dayNotes,
-    goalUpdatedDay, paceSlow, weekGoalOverride, goalStatement,
+    goalUpdatedDay, paceSlow, weekGoalOverride, adaptedWeekThemes, goalStatement,
     checkedSteps, noraInsight, noraDismissed, noraMomentumBonus,
     noraChangeMade, noraPickDay, noraSessionLog,
-    weeklyCheckInDone, weekFocusInput, customGoalInput,
+    weeklyCheckInDone, weekFocusInput, customGoalInput, cashPot, paywallBypassed,
   ]); // eslint-disable-line
 
   const tagColors = {
-    "Tool":    { bg: "#E1F5EE", text: "#0F6E56" },
-    "Read":    { bg: "#E6F1FB", text: "#185FA5" },
-    "Apply":   { bg: T.purpleL,  text: T.purpleD },
-    "Reflect": { bg: "#FEF3C7", text: "#92400E" },
+    "Apply":   { bg: "#F0F7F2", text: "#3A6B50", border: "#BDD9C8" },
+    "Reflect": { bg: "#F5EFEB", text: "#7A3D2E", border: "#C9A090" },
+    "Read":    { bg: "#EEF2FB", text: "#3B55A0", border: "#BACAE8" },
+    "Tool":    { bg: "#EDF7F6", text: "#1A6B62", border: "#9ACFC9" },
   };
 
-  // Generate Days 2-7 on dashboard mount — skip if already in storage
+  // Generate Days 2-7 on dashboard mount, skip if already in storage
   const [weekFailed, setWeekFailed] = useState(false);
   const [isInitialWeekLoad, setIsInitialWeekLoad] = useState(true);
-  const generateWeek = () => {
+  const generateWeek = (day1Task) => {
     setWeekFailed(false);
     setWeekGenerating(true);
-    const day1 = plan.tasks?.[0];
-    generateWeekPlan(plan, day1).then(days => {
+    generateWeekPlan(plan, day1Task).then(days => {
       if (days) {
         const newTasks = {};
         days.forEach(d => { newTasks[d.day] = d; });
@@ -5119,20 +5261,57 @@ function DashboardScreen({ plan, onBack, startDate }) {
       }
     }).catch(() => { setWeekGenerating(false); setIsInitialWeekLoad(false); setWeekFailed(true); });
   };
+
+  // ── Auto-generate Day 1 if missing or was a Tool task (static default) ──
+  const day1GenAttempted = useRef(false);
   useEffect(() => {
     if (!storageLoaded) return;
-    // Only generate if we don't already have saved tasks for days 2-7
-    const hasSavedWeek = Object.keys(dayTasks).length >= 3;
-    if (!hasSavedWeek) generateWeek();
+    const day1 = dayTasks[1];
+    // Generate if null or if it's a leftover Tool/AI task
+    if ((!day1 || day1.tag === 'Tool') && !day1GenAttempted.current) {
+      day1GenAttempted.current = true;
+      setGenerating(1);
+      generateNextDayTask(plan, 0, null, "", noraInsight, {}, {}, {})
+        .then(t => {
+          if (t) {
+            setDayTasks(prev => ({ ...prev, 1: t }));
+            setGenerating(null);
+            // Trigger week gen once Day 1 is ready
+            const hasSavedWeek = Object.keys(dayTasks).filter(k => parseInt(k) >= 2).length >= 3;
+            if (!hasSavedWeek) generateWeek(t);
+          } else {
+            setGenerating(null);
+          }
+        });
+    }
+  }, [storageLoaded]); // eslint-disable-line
+
+  useEffect(() => {
+    if (!storageLoaded) return;
+    const day1 = dayTasks[1];
+    // Only run week gen if Day 1 already exists and we don't have saved days 2-7
+    if (!day1 || day1.tag === 'Tool') return; // wait for day1 gen effect
+    const hasSavedWeek = Object.keys(dayTasks).filter(k => parseInt(k) >= 2).length >= 3;
+    if (!hasSavedWeek && !day1GenAttempted.current) generateWeek(day1);
     else { setWeekGenerating(false); setIsInitialWeekLoad(false); }
   }, [storageLoaded]); // eslint-disable-line
 
-  // Generate initial goal statement — skip if we already have one
+  // Generate initial goal statement, skip if we already have one
   useEffect(() => {
     if (!storageLoaded) return;
     if (!goalStatement) {
       generateGoalStatement(plan, dayTasks, dayStatus, dayNotes).then(s => { if (s) setGoalStatement(s); });
     }
+  }, [storageLoaded]); // eslint-disable-line
+
+  // Generate week arc (w1-w8 themes) on dashboard mount if missing
+  useEffect(() => {
+    if (!storageLoaded) return;
+    if (plan.weekArc?.w1) return; // already have it
+    (async () => {
+      const arc = await generateWeekArc(plan._answers || {}, plan.classification || {});
+      if (arc) setPlanState(prev => ({ ...prev, weekArc: arc }));
+    })();
   }, [storageLoaded]); // eslint-disable-line
 
   // Refresh goal statement when a week completes or every 7 days done
@@ -5162,48 +5341,53 @@ function DashboardScreen({ plan, onBack, startDate }) {
   const w4 = arc.w4 || "Lock in the habit";
 
   // Highest unlocked day: day 1 always unlocked; each subsequent day unlocks after previous is done or skipped
-  const highestUnlocked = (() => {
+  const highestUnlocked = useMemo(() => {
     for (let d = 1; d <= 56; d++) {
       if (!dayStatus[d]) return d;
     }
     return 56;
-  })();
+  }, [dayStatus]);
 
-  const streakCount = (() => {
-    let s = 0, skipsUsed = 0;
-    for (let d = 1; d <= 56; d++) {
-      if (dayStatus[d] === 'done') s++;
-      else if (dayStatus[d] === 'skipped' && skipsUsed === 0) { skipsUsed++; }
-      else break;
-    }
-    return s;
-  })();
+  const streakCount = calcStreak(dayStatus);
 
   // ── MOMENTUM SCORE (0–100) ──────────────────────────────
   // +8 per completed day, -3 per skipped day, +noraMomentumBonus, streak multiplier
-  const momentumScore = (() => {
-    const doneCount = Object.values(dayStatus).filter(s => s === 'done').length;
-    const skipCount = Object.values(dayStatus).filter(s => s === 'skipped').length;
-    const base = doneCount * 8 - skipCount * 3;
+  const momentumScore = useMemo(() => {
+    const dc = Object.values(dayStatus).filter(s => s === 'done').length;
+    const sc = Object.values(dayStatus).filter(s => s === 'skipped').length;
+    const base = dc * 8 - sc * 3;
     const streakBonus = streakCount >= 21 ? 12 : streakCount >= 14 ? 8 : streakCount >= 7 ? 4 : streakCount >= 3 ? 2 : 0;
     return Math.max(0, Math.min(100, base + streakBonus + noraMomentumBonus));
-  })();
+  }, [dayStatus, streakCount, noraMomentumBonus]);
 
   const momentumLabel = momentumScore >= 80 ? "Peak" : momentumScore >= 60 ? "Strong" : momentumScore >= 40 ? "Building" : momentumScore >= 20 ? "Starting" : "Day 1";
 
   // ── WEEK BADGES ─────────────────────────────────────────
   // Earned when ≥5/7 days done in a completed week
-  const weekBadges = Array.from({ length: 8 }, (_, i) => {
+  const weekBadges = useMemo(() => Array.from({ length: 8 }, (_, i) => {
     const wk = i + 1;
     const wkStart = i * 7 + 1;
     const wkDone = Array.from({ length: 7 }, (_, j) => wkStart + j).filter(d => dayStatus[d] === 'done').length;
     const wkComplete = wkStart + 6 < highestUnlocked;
     return wkComplete && wkDone >= 5 ? { week: wk, done: wkDone } : null;
-  }).filter(Boolean);
+  }).filter(Boolean), [dayStatus, highestUnlocked]);
 
   // Handles marking a day done or skipped, then triggers next-day generation
   const [expandedWeek, setExpandedWeek] = useState(null);
   const [dayGenFailed, setDayGenFailed] = useState({});
+  const dayContentRef = useRef(null);
+
+  // Scroll to the time picker + task card when active day changes
+  const isFirstMount = useRef(true);
+  useEffect(() => {
+    if (isFirstMount.current) { isFirstMount.current = false; return; }
+    // Small delay so React has rendered the new day content
+    setTimeout(() => {
+      if (dayContentRef.current) {
+        dayContentRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+    }, 80);
+  }, [activeDay]); // eslint-disable-line
   const markDay = async (dayNum, status) => {
     const note = dayNotes[dayNum] || "";
     // Capture which achievements were already earned before this action
@@ -5215,24 +5399,36 @@ function DashboardScreen({ plan, onBack, startDate }) {
     setDayStatus(newStatus);
 
     // Check for newly unlocked achievements with the updated status
-    const newStreakCount = (() => {
-      let s = 0, skipsUsed = 0;
-      for (let d = 1; d <= 56; d++) {
-        if (newStatus[d] === 'done') s++;
-        else if (newStatus[d] === 'skipped' && skipsUsed === 0) skipsUsed++;
-        else break;
-      }
-      return s;
-    })();
+    const newStreakCount = calcStreak(newStatus);
     const ctx1 = { dayStatus: newStatus, dayTasks, streakCount: newStreakCount, noraChangeMade, noraPickDay };
     const newlyEarned = ACHIEVEMENTS.filter(a => !prevEarned.has(a.id) && a.earned(ctx1));
     if (newlyEarned.length > 0) {
       newlyEarned.forEach((a, i) => {
         setTimeout(() => {
           setAchievementToasts(prev => [...prev, { ...a, _key: `${a.id}-${Date.now()}` }]);
-          setTimeout(() => setAchievementToasts(prev => prev.filter(t => t.id !== a.id)), 4000);
-        }, i * 600);
+        }, i * 200);
       });
+    }
+
+    // ── Strides award + celebration modal ────────────────
+    if (status === 'done') {
+      const tag = dayTasks[dayNum]?.tag || "Apply";
+      const tagCreds = { Apply: 6, Read: 4, Reflect: 5, Tool: 8 };
+      let earned = tagCreds[tag] ?? 5;
+      if (newStreakCount >= 14) earned += 4;
+      else if (newStreakCount >= 7) earned += 2;
+      else if (newStreakCount >= 3) earned += 1;
+      const animId = `act-${Date.now()}`;
+      setCashAnimations(prev => [...prev, { id: animId, amount: earned }]);
+      setTimeout(() => setCashAnimations(prev => prev.filter(a => a.id !== animId)), 1400);
+      // Detect creds milestone crossing before updating cashPot
+      const newPot = cashPot + earned;
+      const crossedMilestone = CRED_MILESTONES.find(m => cashPot < m.at && newPot >= m.at) || null;
+      setTimeout(() => setCashPot(prev => prev + earned), 500);
+      setCelebrationModal({ dayNum, earned, streakCount: newStreakCount, crossedMilestone });
+
+      // Pick a quote from the static library — instant, no API cost
+      setDailyQuotes(prev => ({ ...prev, [dayNum]: pickQuote(dayNum) }));
     }
     if (dayNum < 56) {
       const nextDay = dayNum + 1;
@@ -5258,7 +5454,7 @@ function DashboardScreen({ plan, onBack, startDate }) {
           const checkedCount = Object.values(stepsChecked).filter(Boolean).length;
           const totalSteps = (dayTasks[dayNum]?.steps || []).length;
           const stepsSignal = totalSteps > 0 ? `Completed ${checkedCount} of ${totalSteps} steps.` : "";
-          const paceNote = paceSlow ? "Person requested slower pace — keep this task shorter and lower-friction." : "";
+          const paceNote = paceSlow ? "Person requested slower pace, keep this task shorter and lower-friction." : "";
           const sessionLogNote = noraSessionLog.length
             ? `Nora session history: ${noraSessionLog.slice(-3).map(s => s.summary).join(" | ")}`
             : "";
@@ -5289,14 +5485,15 @@ function DashboardScreen({ plan, onBack, startDate }) {
     setGenerating(null);
   };
 
-  // Called after weekly check-in completes — runs the deferred week batch generation
+  // Called after weekly check-in completes, runs the deferred week batch generation
   const completeWeekGen = async (weekInsight, cmds = {}) => {
     if (!pendingWeekGen) return;
     const { nextWeek, nextWeekStart, newStatus, notesWithCurrent } = pendingWeekGen;
-    // Apply any goal/theme changes from check-in
+    // Apply any goal/theme changes from check-in (immutable — don't mutate props)
+    let updatedPlan = plan;
     if (cmds.changeGoal !== undefined) {
-      plan._answers.goal = cmds.changeGoal;
-      plan._answers.goal_detail = undefined;
+      updatedPlan = { ...plan, _answers: { ...plan._answers, goal: cmds.changeGoal, goal_detail: undefined } };
+      setPlanState(updatedPlan);
       setGoalUpdatedDay(highestUnlocked);
       setGoalStatement("");
     }
@@ -5311,27 +5508,32 @@ function DashboardScreen({ plan, onBack, startDate }) {
     setWeeklyCheckInDone(prev => ({ ...prev, [nextWeek - 1]: weekInsight || true }));
     setPendingWeekGen(null);
     setWeekGenerating(true);
-    const days = await generateWeekBatch(plan, nextWeek, nextWeekStart, dayTasks, newStatus, notesWithCurrent, combinedInsight);
-    if (days) {
+    const planWithGoal = { ...updatedPlan, _goalStatement: goalStatement };
+    const result = await generateWeekBatch(planWithGoal, nextWeek, nextWeekStart, dayTasks, newStatus, notesWithCurrent, combinedInsight);
+    if (result?.days) {
       const newTasks = {};
-      days.forEach(d => { newTasks[d.day] = d; });
+      result.days.forEach(d => { newTasks[d.day] = d; });
       setDayTasks(prev => ({ ...prev, ...newTasks }));
+      // Store the adapted theme if the model suggested a different one
+      if (result.adaptedTheme) {
+        setAdaptedWeekThemes(prev => ({ ...prev, [nextWeek]: result.adaptedTheme }));
+      }
     } else {
       setWeekFailed(true);
     }
     setWeekGenerating(false);
     if (cmds.changeGoal !== undefined) {
-      generateGoalStatement(plan, dayTasks, dayStatus, dayNotes).then(s => { if (s) setGoalStatement(s); });
+      generateGoalStatement(updatedPlan, dayTasks, dayStatus, dayNotes).then(s => { if (s) setGoalStatement(s); });
     }
   };
 
   // Calendar-aware day labels: Day 1 falls on the actual weekday the person started
   const START_DOW = startDate ? new Date(startDate).getDay() : 1; // 0=Sun,1=Mon,...6=Sat
   // Build 56-element array of real weekday labels for each day of the program
-  const dayLabels = Array.from({ length: 56 }, (_, i) => {
+  const dayLabels = useMemo(() => Array.from({ length: 56 }, (_, i) => {
     const dow = (START_DOW + i) % 7;
     return ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][dow];
-  });
+  }), [START_DOW]);
   const daysOfWeek = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]; // kept for week grid row labels
 
   // For each week row, which real weekday does day N fall on?
@@ -5342,32 +5544,71 @@ function DashboardScreen({ plan, onBack, startDate }) {
   });
   const currentWeek = Math.min(8, Math.ceil(highestUnlocked / 7));
   const currentWeekStart = (currentWeek - 1) * 7 + 1;
-  const weekThemes56 = [w1, w2, w3, w4, arc.w5 || 'Build on what worked', arc.w6 || 'Move toward the goal', arc.w7 || 'Make the work visible', arc.w8 || 'Habit locked in'];
+  const weekThemes56 = [1,2,3,4,5,6,7,8].map(wk => {
+    // Priority: adapted theme (from performance-based re-evaluation) > original arc theme > fallback
+    if (adaptedWeekThemes[wk]) return adaptedWeekThemes[wk];
+    const originals = [w1, w2, w3, w4, arc.w5, arc.w6, arc.w7, arc.w8];
+    const fallbacks = [w1, w2, w3, w4, 'Build on what worked', 'Move toward the goal', 'Make the work visible', 'Habit locked in'];
+    return originals[wk - 1] || fallbacks[wk - 1];
+  });
   const currentWeekTheme = weekGoalOverride || weekThemes56[currentWeek - 1] || weekTheme;
 
   return (
-    <div style={{ background: "#fff", minHeight: "100vh", fontFamily: T.sans }}>
+    <div style={{ background: "#FAFAF8", minHeight: "100vh", fontFamily: T.sans }}>
+      <style>{`
+        @keyframes potLand {
+          0%   { transform: scale(1) rotate(0deg); }
+          20%  { transform: scale(1.18) rotate(-4deg); }
+          45%  { transform: scale(0.91) rotate(3deg); }
+          70%  { transform: scale(1.06) rotate(-1deg); }
+          100% { transform: scale(1) rotate(0deg); }
+        }
+        @keyframes cashNumTick {
+          0%   { opacity: 0; transform: translateY(7px); }
+          100% { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes actEarned {
+          0%   { opacity: 0; transform: translateY(0) scale(0.8); }
+          30%  { opacity: 1; transform: translateY(-28px) scale(1.15); }
+          70%  { opacity: 1; transform: translateY(-36px) scale(1); }
+          100% { opacity: 0; transform: translateY(-44px) scale(0.9); }
+        }
+        @media (max-width: 420px) {
+          .sa-dash-task-card { padding: 20px 16px !important; }
+          .sa-dash-nora-box { padding: 14px 14px !important; }
+        }
+      `}</style>
 
       {/* ── HEADER ── */}
-      <div style={{ background: T.grad, padding: "28px clamp(16px, 4vw, 24px) 24px", position: "relative", overflow: "hidden" }}>
-        <div style={{ position: "absolute", top: "10%", right: "3%", width: 260, height: 260, borderRadius: "50%", background: "radial-gradient(circle, rgba(124,111,159,0.2) 0%, transparent 65%)", pointerEvents: "none" }} />
+      <div style={{ background: "linear-gradient(160deg, #1a1730 0%, #2a2445 55%, #1e1835 100%)", padding: "24px clamp(16px, 4vw, 24px) 20px", position: "relative", overflow: "hidden" }}>
+        {/* Subtle ambient glow */}
+        <div style={{ position: "absolute", top: "-20%", right: "-5%", width: 220, height: 220, borderRadius: "50%", background: "radial-gradient(circle, rgba(155,143,224,0.08) 0%, transparent 70%)", pointerEvents: "none" }} />
         <div style={{ maxWidth: 600, margin: "0 auto", position: "relative", zIndex: 1 }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
-            <button onClick={onBack} style={{ background: "none", border: "none", color: "rgba(255,255,255,0.22)", fontFamily: T.sans, fontSize: 13, cursor: "pointer", padding: 0, letterSpacing: 0.2 }}>← results</button>
-            <div style={{ display: "flex", gap: 8 }}>
+          {/* Top bar */}
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 18 }}>
+            <button onClick={onBack} style={{ background: "none", border: "none", color: "rgba(255,255,255,0.2)", fontFamily: T.sans, fontSize: 12, cursor: "pointer", padding: 0 }}>←</button>
+            <div style={{ display: "flex", gap: 6 }}>
               <button onClick={() => setProgressOpen(true)}
-                style={{ background: "rgba(255,255,255,0.1)", border: "1px solid rgba(255,255,255,0.15)", borderRadius: 20, padding: "6px 14px", fontFamily: T.sans, fontSize: 13, color: "rgba(255,255,255,0.75)", cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
-                <svg width="13" height="13" viewBox="0 0 14 14" fill="none"><rect x="1" y="7" width="3" height="6" rx="1" fill="rgba(255,255,255,0.7)"/><rect x="5.5" y="4" width="3" height="9" rx="1" fill="rgba(255,255,255,0.7)"/><rect x="10" y="1" width="3" height="12" rx="1" fill="rgba(255,255,255,0.7)"/></svg>
-                <span>Progress</span>
+                style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 20, padding: "5px 12px", fontFamily: T.sans, fontSize: 12, color: "rgba(255,255,255,0.55)", cursor: "pointer", display: "flex", alignItems: "center", gap: 5, transition: "background 0.15s" }}
+                onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.1)"}
+                onMouseLeave={e => e.currentTarget.style.background = "rgba(255,255,255,0.06)"}>
+                <svg width="12" height="12" viewBox="0 0 14 14" fill="none"><rect x="1" y="7" width="3" height="6" rx="1" fill="rgba(255,255,255,0.55)"/><rect x="5.5" y="4" width="3" height="9" rx="1" fill="rgba(255,255,255,0.55)"/><rect x="10" y="1" width="3" height="12" rx="1" fill="rgba(255,255,255,0.55)"/></svg>
+                Progress
               </button>
               <button onClick={() => setArcOpen(o => !o)}
-                style={{ background: "rgba(255,255,255,0.1)", border: "1px solid rgba(255,255,255,0.15)", borderRadius: 20, padding: "6px 14px", fontFamily: T.sans, fontSize: 13, color: "rgba(255,255,255,0.75)", cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
-                <span>Week {currentWeek} of 8</span>
-                <span style={{ fontSize: 13, opacity: 0.7 }}>{arcOpen ? "▾" : "▸"}</span>
+                style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 20, padding: "5px 12px", fontFamily: T.sans, fontSize: 12, color: "rgba(255,255,255,0.55)", cursor: "pointer", display: "flex", alignItems: "center", gap: 5, transition: "background 0.15s" }}
+                onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.1)"}
+                onMouseLeave={e => e.currentTarget.style.background = "rgba(255,255,255,0.06)"}>
+                <svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M1 7C1 3.686 3.686 1 7 1s6 2.686 6 6-2.686 6-6 6S1 10.314 1 7Z" stroke="rgba(255,255,255,0.55)" strokeWidth="1.3"/><path d="M7 4v3l2 2" stroke="rgba(255,255,255,0.55)" strokeWidth="1.3" strokeLinecap="round"/></svg>
+                Goal map
               </button>
             </div>
           </div>
-          <p style={{ fontFamily: T.sans, fontSize: 14, color: "rgba(255,255,255,0.45)", margin: "0 0 6px", fontWeight: 400 }}>{`${(plan.name || plan.profileName).trim()} · Week ${currentWeek}${paceSlow ? " · Steady pace" : streakCount >= 21 ? " · Habit forming" : streakCount >= 14 ? " · Building momentum" : streakCount >= 7 ? " · Consistent" : streakCount >= 3 ? " · Getting started" : ""}`}</p>
+
+          {/* Greeting + week theme */}
+          <p style={{ fontFamily: T.sans, fontSize: 13, color: "rgba(255,255,255,0.35)", margin: "0 0 4px", fontWeight: 500 }}>
+            {plan.name ? `${plan.name.trim()}'s program` : "Your program"} · Week {currentWeek}
+          </p>
           {headerWeekEdit ? (
             <div style={{ margin: "0 0 6px" }}>
               <input
@@ -5376,7 +5617,7 @@ function DashboardScreen({ plan, onBack, startDate }) {
                 onChange={e => setHeaderWeekDraft(e.target.value)}
                 onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); document.getElementById("header-week-save")?.click(); } if (e.key === "Escape") setHeaderWeekEdit(false); }}
                 placeholder="e.g. Build stakeholder visibility"
-                style={{ width: "100%", padding: "8px 12px", border: "1.5px solid rgba(255,255,255,0.35)", borderRadius: 8, fontFamily: T.serif, fontSize: "clamp(18px, 3.5vw, 24px)", fontWeight: 400, color: "#fff", background: "rgba(255,255,255,0.08)", outline: "none", boxSizing: "border-box", letterSpacing: -0.3 }}
+                style={{ width: "100%", padding: "8px 12px", border: "1.5px solid rgba(255,255,255,0.25)", borderRadius: 10, fontFamily: T.sans, fontSize: "clamp(16px, 3vw, 20px)", fontWeight: 600, color: "#fff", background: "rgba(255,255,255,0.06)", outline: "none", boxSizing: "border-box", letterSpacing: -0.3 }}
               />
               <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
                 <button id="header-week-save"
@@ -5399,119 +5640,159 @@ function DashboardScreen({ plan, onBack, startDate }) {
                     }
                     setGoalUpdating(false);
                   }}
-                  style={{ background: headerWeekDraft.trim() && !goalUpdating ? "rgba(255,255,255,0.2)" : "rgba(255,255,255,0.05)", color: headerWeekDraft.trim() ? "#fff" : "rgba(255,255,255,0.3)", border: "1px solid rgba(255,255,255,0.2)", borderRadius: 6, padding: "6px 14px", fontFamily: T.sans, fontSize: 12, fontWeight: 600, cursor: headerWeekDraft.trim() && !goalUpdating ? "pointer" : "default" }}>
+                  style={{ background: headerWeekDraft.trim() && !goalUpdating ? "rgba(255,255,255,0.15)" : "rgba(255,255,255,0.04)", color: headerWeekDraft.trim() ? "#fff" : "rgba(255,255,255,0.25)", border: "1px solid rgba(255,255,255,0.15)", borderRadius: 8, padding: "6px 14px", fontFamily: T.sans, fontSize: 12, fontWeight: 600, cursor: headerWeekDraft.trim() && !goalUpdating ? "pointer" : "default" }}>
                   {goalUpdating ? "Saving…" : "Save + regenerate"}
                 </button>
                 <button onClick={() => setHeaderWeekEdit(false)}
-                  style={{ background: "none", border: "none", fontFamily: T.sans, fontSize: 12, color: "rgba(255,255,255,0.4)", cursor: "pointer", padding: "6px 8px" }}>
+                  style={{ background: "none", border: "none", fontFamily: T.sans, fontSize: 12, color: "rgba(255,255,255,0.3)", cursor: "pointer", padding: "6px 8px" }}>
                   Cancel
                 </button>
               </div>
             </div>
           ) : (
-            <div style={{ display: "flex", alignItems: "baseline", gap: 10, margin: "0 0 6px" }}>
-              <h1 style={{ fontFamily: T.serif, fontSize: "clamp(22px,4vw,30px)", fontWeight: 400, color: "#fff", margin: 0, lineHeight: 1.2, letterSpacing: -0.5 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "0 0 4px" }}>
+              <h1 style={{ fontFamily: T.sans, fontSize: "clamp(18px,3.5vw,24px)", fontWeight: 700, color: "#fff", margin: 0, lineHeight: 1.25, letterSpacing: -0.5 }}>
                 {currentWeekTheme}
               </h1>
-              <button onClick={() => { setHeaderWeekDraft(currentWeekTheme); setHeaderWeekEdit(true); }}
-                style={{ background: "none", border: "none", fontFamily: T.sans, fontSize: 12, color: "rgba(255,255,255,0.3)", cursor: "pointer", padding: 0, flexShrink: 0, letterSpacing: 0.2 }}>
-                edit
-              </button>
             </div>
           )}
+
+          {/* 12-month goal — compact */}
           {(() => {
             const goalTexts = GOAL_TEXTS;
-            const goalText = plan._answers?.goal_custom || goalTexts[plan._answers?.goal];
-            return (goalStatement || goalText) ? (
-              <p style={{ fontFamily: T.sans, fontSize: 13, color: "rgba(255,255,255,0.38)", margin: 0, lineHeight: 1.5, fontStyle: "italic" }}>{goalStatement || goalText}</p>
+            const rawGoalText = plan._answers?.goal_custom || goalTexts[plan._answers?.goal];
+            const displayText = (noraChangeMade && goalStatement) ? goalStatement : rawGoalText;
+            return displayText ? (
+              <p style={{ fontFamily: T.sans, fontSize: 14, color: "rgba(255,255,255,0.4)", margin: "0 0 16px", lineHeight: 1.5 }}>
+                <span style={{ fontWeight: 600, letterSpacing: "0.05em", textTransform: "uppercase", fontSize: 11, color: "rgba(255,255,255,0.25)" }}>Goal </span>
+                {displayText}
+              </p>
             ) : null;
           })()}
-          {/* ── STATS ROW ── */}
-          <div style={{ display: "flex", gap: 16, alignItems: "center", marginTop: 18 }}>
 
-            {/* Momentum arc */}
-            <MomentumArc momentumScore={momentumScore} momentumLabel={momentumLabel} />
+          {/* ── STATS ROW — compact, horizontal ── */}
+          <div style={{ display: "flex", gap: 8, alignItems: "stretch", flexWrap: "wrap" }}>
 
-            <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 10 }}>
-              {/* Streak + this week */}
-              <div style={{ display: "flex", gap: 10 }}>
-                {streakCount > 0 && (() => {
-                  // Color tiers: dim → warm orange → amber → hot red-orange
-                  const streakBg = streakCount >= 21 ? "rgba(239,68,68,0.22)"
-                    : streakCount >= 14 ? "rgba(249,115,22,0.22)"
-                    : streakCount >= 7  ? "rgba(251,191,36,0.18)"
-                    : streakCount >= 3  ? "rgba(251,146,60,0.15)"
-                    : "rgba(255,255,255,0.08)";
-                  const streakBorder = streakCount >= 21 ? "rgba(239,68,68,0.5)"
-                    : streakCount >= 14 ? "rgba(249,115,22,0.45)"
-                    : streakCount >= 7  ? "rgba(251,191,36,0.4)"
-                    : streakCount >= 3  ? "rgba(251,146,60,0.35)"
-                    : "rgba(255,255,255,0.1)";
-                  const fireSize = streakCount >= 21 ? 26 : streakCount >= 7 ? 24 : 22;
-                  const isPulsing = streakCount >= 7;
-                  return (
-                    <div style={{ background: streakBg, border: `1px solid ${streakBorder}`, borderRadius: 10, padding: "8px 14px", display: "flex", alignItems: "center", gap: 7, transition: "background 0.5s, border-color 0.5s" }}>
-                      <span style={{ fontSize: fireSize, animation: isPulsing ? "firePulse 2s ease-in-out infinite" : "none", display: "inline-block" }}>🔥</span>
-                      <div>
-                        <p style={{ fontFamily: T.sans, fontSize: 20, fontWeight: 700, color: "#fff", margin: 0, lineHeight: 1 }}>{streakCount}</p>
-                        <p style={{ fontFamily: T.sans, fontSize: 10, color: "rgba(255,255,255,0.4)", margin: 0, textTransform: "uppercase", letterSpacing: 0.8 }}>streak</p>
-                      </div>
-                    </div>
-                  );
-                })()}
-                <div style={{ background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 10, padding: "8px 14px", display: "flex", alignItems: "center", gap: 7 }}>
-                  <div>
-                    <p style={{ fontFamily: T.sans, fontSize: 20, fontWeight: 700, color: "#fff", margin: 0, lineHeight: 1 }}>
-                      {Array.from({length:7},(_,i)=>(currentWeek-1)*7+i+1).filter(d=>dayStatus[d]==='done').length}<span style={{ fontSize: 13, fontWeight: 400, color: "rgba(255,255,255,0.4)" }}>/7</span>
-                    </p>
-                    <p style={{ fontFamily: T.sans, fontSize: 10, color: "rgba(255,255,255,0.35)", margin: 0, textTransform: "uppercase", letterSpacing: 0.8 }}>this week</p>
-                  </div>
+            {/* Creds */}
+            <div style={{ position: "relative", flexShrink: 0 }}>
+              <div
+                onClick={() => setShowCredsLog(true)}
+                style={{
+                  height: 54, padding: "0 14px",
+                  borderRadius: 14,
+                  background: "rgba(240,180,41,0.08)",
+                  border: "1px solid rgba(240,180,41,0.2)",
+                  display: "flex", alignItems: "center", gap: 8,
+                  cursor: "pointer", transition: "background 0.15s",
+                }}
+                onMouseEnter={e => e.currentTarget.style.background = "rgba(240,180,41,0.14)"}
+                onMouseLeave={e => e.currentTarget.style.background = "rgba(240,180,41,0.08)"}>
+                <span style={{ fontSize: 18, display: "flex", alignItems: "center" }}>
+                  {/* Dynamic coin stack — grows with doneCount */}
+                  <svg width={doneCount >= 21 ? 24 : doneCount >= 8 ? 22 : doneCount >= 3 ? 20 : 18} height={doneCount >= 21 ? 28 : doneCount >= 8 ? 24 : doneCount >= 3 ? 20 : 16} viewBox="0 0 48 56" fill="none" style={{ transition: "all 0.5s ease" }}>
+                    {/* Bottom coin — always visible */}
+                    <ellipse cx="24" cy={doneCount >= 3 ? 50 : 50} rx="13" ry="4.5" fill="#d4900f" stroke="#f0b429" strokeWidth="1"/>
+                    <ellipse cx="24" cy={doneCount >= 3 ? 48 : 48} rx="13" ry="4.5" fill="#f0b429" stroke="#fad568" strokeWidth="1.2"/>
+                    <ellipse cx="20" cy={doneCount >= 3 ? 47.2 : 47.2} rx="5" ry="1.5" fill="rgba(255,255,255,0.25)" transform={`rotate(-10 20 ${doneCount >= 3 ? 47.2 : 47.2})`}/>
+                    {/* 2nd coin — 3+ days */}
+                    {doneCount >= 3 && <>
+                      <rect x="11" y="38" width="26" height="10" fill="#92640a"/>
+                      <ellipse cx="24" cy="38" rx="13" ry="4.5" fill="#c8860e" stroke="#f0b429" strokeWidth="1"/>
+                      <ellipse cx="24" cy="36" rx="13" ry="4.5" fill="#f0b429" stroke="#fad568" strokeWidth="1.2"/>
+                      <ellipse cx="21" cy="35.2" rx="4.5" ry="1.3" fill="rgba(255,255,255,0.2)" transform="rotate(-8 21 35.2)"/>
+                    </>}
+                    {/* 3rd coin — 8+ days */}
+                    {doneCount >= 8 && <>
+                      <rect x="11" y="26" width="26" height="10" fill="#7a5208"/>
+                      <ellipse cx="24" cy="26" rx="13" ry="4.5" fill="#d4900f" stroke="#f0b429" strokeWidth="1"/>
+                      <ellipse cx="24" cy="24" rx="13" ry="4.5" fill="#f0b429" stroke="#fad568" strokeWidth="1.2"/>
+                      <ellipse cx="20" cy="23" rx="5" ry="1.4" fill="rgba(255,255,255,0.22)" transform="rotate(-10 20 23)"/>
+                    </>}
+                    {/* 4th coin — 21+ days */}
+                    {doneCount >= 21 && <>
+                      <rect x="11" y="14" width="26" height="10" fill="#5c3c06"/>
+                      <ellipse cx="24" cy="14" rx="13" ry="4.5" fill="#c8860e" stroke="#f0b429" strokeWidth="1"/>
+                      <ellipse cx="24" cy="12" rx="13" ry="4.5" fill="#f0b429" stroke="#fad568" strokeWidth="1.5"/>
+                      <ellipse cx="20" cy="11" rx="5" ry="1.5" fill="rgba(255,255,255,0.3)" transform="rotate(-10 20 11)"/>
+                    </>}
+                    {/* 5th coin crown — 35+ days */}
+                    {doneCount >= 35 && <>
+                      <rect x="11" y="4" width="26" height="8" fill="#5c3c06"/>
+                      <ellipse cx="24" cy="4" rx="13" ry="4.5" fill="#d4900f" stroke="#fad568" strokeWidth="1"/>
+                      <ellipse cx="24" cy="2" rx="13" ry="4.5" fill="#fad568" stroke="#ffe08a" strokeWidth="1.5"/>
+                      <ellipse cx="19" cy="1.2" rx="5.5" ry="1.6" fill="rgba(255,255,255,0.35)" transform="rotate(-10 19 1.2)"/>
+                    </>}
+                  </svg>
+                </span>
+                <div>
+                  <p key={cashPot} style={{ fontFamily: T.sans, fontSize: 16, fontWeight: 800, color: "#fad568", margin: 0, lineHeight: 1, animation: cashAnimations.length > 0 ? "cashNumTick 0.35s ease 0.6s both" : "none" }}>{cashPot}</p>
+                  <p style={{ fontFamily: T.sans, fontSize: 11, color: "rgba(240,180,41,0.55)", margin: 0, textTransform: "uppercase", letterSpacing: 0.8, fontWeight: 600 }}>Creds</p>
                 </div>
               </div>
+              {cashAnimations.map(anim => (
+                <div key={anim.id} style={{ position: "absolute", bottom: "100%", left: "50%", transform: "translateX(-50%)", pointerEvents: "none", zIndex: 10, fontFamily: T.sans, fontSize: 13, fontWeight: 800, color: "#fad568", whiteSpace: "nowrap", textShadow: "0 2px 8px rgba(240,180,41,0.8)", animation: "actEarned 1.3s ease-out forwards" }}>+{anim.amount} Cr</div>
+              ))}
+            </div>
 
-              {/* Week dot trail — 8 dots */}
-              <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
-                {Array.from({ length: 8 }, (_, i) => {
-                  const wk = i + 1;
-                  const badge = weekBadges.find(b => b.week === wk);
-                  const isCurrent = wk === currentWeek;
-                  const isPast = wk < currentWeek;
-                  return (
-                    <div key={wk} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
-                      <div style={{
-                        width: isCurrent ? 28 : 22, height: isCurrent ? 28 : 22,
-                        borderRadius: "50%",
-                        background: badge ? T.purple : isCurrent ? "rgba(255,255,255,0.15)" : "rgba(255,255,255,0.07)",
-                        border: badge ? `2px solid ${T.purpleMid}` : isCurrent ? "2px solid rgba(255,255,255,0.5)" : "1.5px solid rgba(255,255,255,0.12)",
-                        display: "flex", alignItems: "center", justifyContent: "center",
-                        flexShrink: 0, transition: "all 0.3s",
-                      }}>
-                        {badge
-                          ? <span style={{ fontSize: 10 }}>✓</span>
-                          : <span style={{ fontFamily: T.sans, fontSize: isCurrent ? 10 : 9, fontWeight: 600, color: isCurrent ? "#fff" : "rgba(255,255,255,0.3)" }}>{wk}</span>
-                        }
-                      </div>
-                    </div>
-                  );
-                })}
+            {/* Streak */}
+            <div style={{
+              height: 54, padding: "0 14px",
+              borderRadius: 14,
+              background: streakCount >= 7 ? "rgba(251,191,36,0.1)" : streakCount >= 3 ? "rgba(251,146,60,0.08)" : "rgba(255,255,255,0.04)",
+              border: `1px solid ${streakCount >= 7 ? "rgba(251,191,36,0.25)" : streakCount >= 3 ? "rgba(251,146,60,0.2)" : "rgba(255,255,255,0.08)"}`,
+              display: "flex", alignItems: "center", gap: 6, flexShrink: 0, transition: "all 0.3s",
+            }}>
+              <span style={{ fontSize: 16 }}>🔥</span>
+              <div>
+                <p style={{ fontFamily: T.sans, fontSize: 16, fontWeight: 800, color: "#fff", margin: 0, lineHeight: 1 }}>{streakCount || 0}</p>
+                <p style={{ fontFamily: T.sans, fontSize: 11, color: "rgba(255,255,255,0.35)", margin: 0, textTransform: "uppercase", letterSpacing: 0.8, fontWeight: 600 }}>streak</p>
               </div>
             </div>
+
+            {/* Week progress — ring */}
+            {(() => {
+              const weekDone = Array.from({length:7},(_,i)=>(currentWeek-1)*7+i+1).filter(d=>dayStatus[d]==='done').length;
+              const pct = weekDone / 7;
+              const circumference = 2 * Math.PI * 17;
+              return (
+                <div style={{
+                  height: 54, padding: "0 10px 0 6px",
+                  borderRadius: 14,
+                  background: "rgba(255,255,255,0.04)",
+                  border: "1px solid rgba(255,255,255,0.08)",
+                  display: "flex", alignItems: "center", gap: 6, flexShrink: 0,
+                }}>
+                  <svg width="38" height="38" viewBox="0 0 38 38">
+                    <circle cx="19" cy="19" r="17" fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="3" />
+                    <circle cx="19" cy="19" r="17" fill="none" stroke={pct >= 1 ? "#4AE080" : "#9B8FE0"} strokeWidth="3" strokeLinecap="round"
+                      strokeDasharray={`${pct * circumference} ${circumference}`}
+                      style={{ transform: "rotate(-90deg)", transformOrigin: "center", transition: "stroke-dasharray 0.5s ease" }} />
+                    <text x="19" y="20" textAnchor="middle" dominantBaseline="middle" style={{ fontFamily: "Inter, sans-serif", fontSize: 11, fontWeight: 800, fill: "#fff" }}>{weekDone}</text>
+                  </svg>
+                  <div>
+                    <p style={{ fontFamily: T.sans, fontSize: 10, color: "rgba(255,255,255,0.35)", margin: 0, textTransform: "uppercase", letterSpacing: 0.8, fontWeight: 600, lineHeight: 1.3 }}>this</p>
+                    <p style={{ fontFamily: T.sans, fontSize: 10, color: "rgba(255,255,255,0.35)", margin: 0, textTransform: "uppercase", letterSpacing: 0.8, fontWeight: 600, lineHeight: 1.3 }}>week</p>
+                  </div>
+                </div>
+              );
+            })()}
+
           </div>
         </div>
       </div>
 
-      <div style={{ maxWidth: 600, margin: "0 auto", padding: "28px clamp(16px, 4vw, 24px) 24px" }}>
+      <div ref={dayContentRef} style={{ maxWidth: 600, margin: "0 auto", padding: "28px clamp(16px, 4vw, 24px) 24px" }}>
 
 
         {/* ── WEEK PLAN FAILED BANNER ── */}
         {weekFailed && (
           <div style={{ background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 10, padding: "14px 18px", marginBottom: 20, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
             <p style={{ fontFamily: T.sans, fontSize: 14, color: "#991B1B", margin: 0 }}>Could not load your week plan. Check your connection.</p>
-            <button onClick={generateWeek} style={{ background: "#991B1B", color: "#fff", border: "none", fontFamily: T.sans, fontSize: 13, fontWeight: 600, padding: "8px 16px", borderRadius: 0, cursor: "pointer", flexShrink: 0, marginLeft: 12 }}>Retry</button>
+            <button onClick={() => generateWeek(dayTasks[1])} style={{ background: "#991B1B", color: "#fff", border: "none", fontFamily: T.sans, fontSize: 13, fontWeight: 600, padding: "8px 16px", borderRadius: 10, cursor: "pointer", flexShrink: 0, marginLeft: 12 }}>Retry</button>
           </div>
         )}
 
-        {/* ── PROGRAM GRID — current week expanded, past weeks collapsible, future weeks hidden ── */}
+        {/* ── PROGRAM GRID, current week expanded, past weeks collapsible, future weeks hidden ── */}
         <div style={{ marginBottom: 24 }}>
           {[1,2,3,4,5,6,7,8].map(wk => {
             const wkStart = (wk - 1) * 7 + 1;
@@ -5528,7 +5809,7 @@ function DashboardScreen({ plan, onBack, startDate }) {
 
             return (
               <div key={wk} style={{ marginBottom: 12 }}>
-                {/* Week header row — clickable for past weeks */}
+                {/* Week header row, clickable for past weeks */}
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: isExpanded ? 7 : 0,
                   cursor: isPastWk ? "pointer" : "default",
                   padding: isPastWk && !isExpanded ? "6px 0" : "0",
@@ -5537,10 +5818,16 @@ function DashboardScreen({ plan, onBack, startDate }) {
                   <div style={{ display: "flex", alignItems: "center", gap: 8, flex: 1, minWidth: 0 }}>
                     {isCurrentWk
                       ? <div style={{ width: 7, height: 7, borderRadius: "50%", background: T.purple, flexShrink: 0 }} />
-                      : <span style={{ fontSize: 13, color: "#0F6E56", flexShrink: 0 }}>✓</span>
+                      : <span style={{ fontSize: 13, color: T.purple, flexShrink: 0 }}>✓</span>
                     }
                     <span style={{ fontFamily: T.sans, fontSize: 13, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", color: isCurrentWk ? T.purple : T.body, flexShrink: 0 }}>Week {wk}</span>
                     <span style={{ fontFamily: T.sans, fontSize: 13, color: isCurrentWk ? T.ink : T.muted, fontWeight: isCurrentWk ? 500 : 400, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{wkTheme}</span>
+                    {isCurrentWk && (
+                      <button onClick={(e) => { e.stopPropagation(); setHeaderWeekDraft(currentWeekTheme); setHeaderWeekEdit(true); window.scrollTo({ top: 0, behavior: "smooth" }); }}
+                        style={{ background: "none", border: "none", fontFamily: T.sans, fontSize: 11, color: T.purple, cursor: "pointer", padding: "2px 4px", flexShrink: 0, opacity: 0.5 }}>
+                        edit
+                      </button>
+                    )}
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0, marginLeft: 8 }}>
                     <span style={{ fontFamily: T.sans, fontSize: 13, color: T.muted }}>{wkDone}/7</span>
@@ -5552,9 +5839,9 @@ function DashboardScreen({ plan, onBack, startDate }) {
                   </div>
                 </div>
 
-                {/* Day tiles — shown when current or expanded */}
+                {/* Day tiles, shown when current or expanded */}
                 {isExpanded && (
-                  <div style={{ display: "flex", gap: 4 }}>
+                  <div style={{ display: "flex", gap: 5 }}>
                     {weekDayLabels(wk).map((d, i) => {
                       const dayNum = wkStart + i;
                       const status = dayStatus[dayNum];
@@ -5564,20 +5851,20 @@ function DashboardScreen({ plan, onBack, startDate }) {
                       return (
                         <div key={dayNum} style={{ flex: 1, textAlign: "center", cursor: !isFuture ? "pointer" : "default" }}
                           onClick={() => { if (!isFuture) { setActiveDay(dayNum); window.scrollTo({ top: 0, behavior: "smooth" }); } }}>
-                          <p style={{ fontFamily: T.sans, fontSize: 13, color: isActive ? T.purple : T.muted, margin: "0 0 4px", fontWeight: isActive ? 700 : 400 }}>{d}</p>
+                          <p style={{ fontFamily: T.sans, fontSize: 11, color: isActive ? T.purple : T.muted, margin: "0 0 5px", fontWeight: isActive ? 700 : 500, letterSpacing: 0.3 }}>{d}</p>
                           <div style={{
-                            height: 30, borderRadius: 6,
-                            background: status === 'done' ? T.purple : status === 'skipped' ? "#E5E5E5" : isActive ? T.purpleL : "#F4F4F4",
-                            border: isActive ? `1.5px solid ${T.purpleMid}` : "1.5px solid transparent",
+                            height: 36, borderRadius: 10,
+                            background: status === 'done' ? "linear-gradient(135deg, #7c6f9f, #9B8FD0)" : status === 'skipped' ? "#EEEDEE" : isActive ? T.purpleL : "#F2F1F4",
+                            border: isActive && !status ? `2px solid ${T.purpleMid}` : "2px solid transparent",
                             display: "flex", alignItems: "center", justifyContent: "center",
-                            opacity: isFuture && !isGeneratingThis ? 0.35 : 1,
-                            transition: "all 0.2s",
+                            opacity: isFuture && !isGeneratingThis ? 0.3 : 1,
+                            transition: "all 0.25s ease",
                           }}>
                             {status === 'done' && <span style={{ color: "#fff", fontSize: 13, fontWeight: 700 }}>✓</span>}
-                            {status === 'skipped' && <span style={{ color: T.muted, fontSize: 13 }}>–</span>}
-                            {!status && !isFuture && <div style={{ width: 4, height: 4, borderRadius: "50%", background: isActive ? T.purple : T.muted }} />}
-                            {isFuture && isGeneratingThis && <div style={{ width: 4, height: 4, borderRadius: "50%", background: T.purpleMid, opacity: 0.6 }} />}
-                            {isFuture && !isGeneratingThis && <svg width="6" height="7" viewBox="0 0 8 9" fill="none"><rect x="0.5" y="3.5" width="7" height="5" rx="1.2" stroke={T.muted} strokeWidth="1.1"/><path d="M2 3.5V2.5a2 2 0 0 1 4 0v1" stroke={T.muted} strokeWidth="1.1" strokeLinecap="round"/></svg>}
+                            {status === 'skipped' && <span style={{ color: T.muted, fontSize: 11 }}>–</span>}
+                            {!status && !isFuture && <div style={{ width: 5, height: 5, borderRadius: "50%", background: isActive ? T.purple : "#C8C4DC" }} />}
+                            {isFuture && isGeneratingThis && <div style={{ width: 5, height: 5, borderRadius: "50%", background: T.purpleMid, opacity: 0.5 }} />}
+                            {isFuture && !isGeneratingThis && <svg width="6" height="7" viewBox="0 0 8 9" fill="none"><rect x="0.5" y="3.5" width="7" height="5" rx="1.2" stroke="#C8C4DC" strokeWidth="1.1"/><path d="M2 3.5V2.5a2 2 0 0 1 4 0v1" stroke="#C8C4DC" strokeWidth="1.1" strokeLinecap="round"/></svg>}
                           </div>
                         </div>
                       );
@@ -5618,26 +5905,44 @@ function DashboardScreen({ plan, onBack, startDate }) {
                 <p style={{ fontFamily: T.serif, fontSize: 17, color: T.black, margin: "0 0 6px", fontWeight: 400 }}>Could not build Day {dayNum}.</p>
                 <p style={{ fontFamily: T.sans, fontSize: 14, color: T.muted, margin: "0 0 20px", lineHeight: 1.6 }}>Check your connection and try again.</p>
                 <button onClick={() => retryDayGen(dayNum)}
-                  style={{ background: T.black, color: "#fff", border: "none", fontFamily: T.sans, fontSize: 14, fontWeight: 600, padding: "11px 24px", borderRadius: 0, cursor: "pointer" }}>
+                  style={{ background: T.black, color: "#fff", border: "none", fontFamily: T.sans, fontSize: 14, fontWeight: 600, padding: "11px 24px", borderRadius: 10, cursor: "pointer" }}>
                   Try again
                 </button>
               </div>
             );
           }
 
-          if (isGenerating || (!task && !isLocked)) {
+          if (isGenerating || (!task && !isLocked && (weekGenerating || generating !== null))) {
             return (
               <div key={dayNum} style={{ textAlign: "center", padding: "48px 24px" }}>
                 <div style={{ width: 40, height: 40, borderRadius: "50%", border: `3px solid ${T.purpleL}`, borderTop: `3px solid ${T.purple}`, animation: "spin 0.8s linear infinite", margin: "0 auto 16px" }} />
-                <p style={{ fontFamily: T.serif, fontSize: 18, color: T.black, margin: "0 0 4px", fontWeight: 400 }}>Building Day {dayNum}...</p>
-                <p style={{ fontFamily: T.sans, fontSize: 15, color: T.muted, margin: 0 }}>Adapting to your Day {dayNum - 1} progress.</p>
+                <p style={{ fontFamily: T.serif, fontSize: 18, color: T.black, margin: "0 0 4px", fontWeight: 400 }}>
+                  {`Building Day ${dayNum}...`}
+                </p>
+                <p style={{ fontFamily: T.sans, fontSize: 15, color: T.muted, margin: 0 }}>
+                  {weekGenerating ? "Generating your week ahead." : dayNum === 1 ? "Personalising your first task." : `Adapting to your progress.`}
+                </p>
+              </div>
+            );
+          }
+
+          // Task still missing after generation finished → show retry
+          if (!task && !isLocked) {
+            return (
+              <div key={dayNum} style={{ textAlign: "center", padding: "48px 24px" }}>
+                <p style={{ fontFamily: T.serif, fontSize: 17, color: T.black, margin: "0 0 6px", fontWeight: 400 }}>Could not build Day {dayNum}.</p>
+                <p style={{ fontFamily: T.sans, fontSize: 14, color: T.muted, margin: "0 0 20px", lineHeight: 1.6 }}>Check your connection and try again.</p>
+                <button onClick={() => retryDayGen(dayNum)}
+                  style={{ background: T.black, color: "#fff", border: "none", fontFamily: T.sans, fontSize: 14, fontWeight: 600, padding: "11px 24px", borderRadius: 8, cursor: "pointer" }}>
+                  Try again
+                </button>
               </div>
             );
           }
 
           return (
             <div key={dayNum}>
-              {/* Back breadcrumb — shown when viewing a past day */}
+              {/* Back breadcrumb, shown when viewing a past day */}
               {status && dayNum < (currentWeek - 1) * 7 + 1 && (
                 <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
                   <button onClick={() => { setActiveDay(highestUnlocked); setExpandedWeek(null); window.scrollTo({ top: 0, behavior: "smooth" }); }}
@@ -5647,76 +5952,231 @@ function DashboardScreen({ plan, onBack, startDate }) {
                   <span style={{ fontFamily: T.sans, fontSize: 13, color: T.muted }}>· Day {dayNum} · {status === 'done' ? 'Completed' : 'Skipped'}</span>
                 </div>
               )}
-              {/* Task card */}
-              <div style={{ background: "#fff", border: `1px solid ${T.border}`, borderLeft: `4px solid ${status === 'done' ? "#0F6E56" : status === 'skipped' ? T.border : T.purple}`, borderRadius: 16, padding: "28px 24px", marginBottom: 16, boxShadow: T.shadowMd }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
-                  <span style={{ fontFamily: T.sans, fontSize: 13, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", padding: "5px 12px", background: ts.bg, color: ts.text, borderRadius: 4 }}>{task.tag}</span>
-                  <span style={{ fontFamily: T.sans, fontSize: 14, color: T.muted }}>{task.time}</span>
-                  {!status && <span style={{ marginLeft: "auto", fontFamily: T.sans, fontSize: 13, fontWeight: 700, color: T.purple, letterSpacing: 0.5 }}>Day {dayNum}</span>}
-                  {status === 'done' && <span style={{ marginLeft: "auto", fontFamily: T.sans, fontSize: 13, fontWeight: 600, color: "#0F6E56", background: "#E1F5EE", padding: "4px 12px", borderRadius: 20 }}>Done ✓</span>}
-                  {status === 'skipped' && <span style={{ marginLeft: "auto", fontFamily: T.sans, fontSize: 13, color: T.muted, background: T.cream, padding: "4px 12px", borderRadius: 20 }}>Skipped</span>}
-                </div>
-                <>
-                  <h3 style={{ fontFamily: T.sans, fontSize: 19, fontWeight: 700, color: T.black, margin: "0 0 14px", lineHeight: 1.3 }}>{task.title}</h3>
-                  <p style={{ fontFamily: T.sans, fontSize: 16, color: T.ink, margin: "0 0 18px", lineHeight: 1.85 }}>{task.desc}</p>
-                </>
-                <TaskSteps steps={task.steps} initialChecked={checkedSteps[dayNum] || {}} onCheckedChange={c => setCheckedSteps(prev => ({ ...prev, [dayNum]: c }))} />
-                {(task.whyBase || task.why) && (() => {
-                  const goalIdx2 = plan._answers?.goal ?? -1;
-                  const whyLabel2 = [
-                    "Why this moves you toward that role:",
-                    "Why this makes you a stronger candidate:",
-                    "Why this builds toward the pivot:",
-                    "Why this keeps you relevant:",
-                    "Why this builds real confidence:",
-                  ][goalIdx2] || "Why this matters:";
-                  return (
-                    <div style={{ borderLeft: `3px solid ${T.purple}`, paddingLeft: 14 }}>
-                      <p style={{ fontFamily: T.sans, fontSize: 15, color: T.body, margin: 0, lineHeight: 1.75 }}>
-                        <strong style={{ color: T.black, fontSize: 15 }}>{whyLabel2} </strong>{task.whyBase || task.why}
-                      </p>
-                    </div>
-                  );
-                })()}
+              {/* ── DAILY TIME PICKER — only when task not yet done/skipped ── */}
+              {!status && task && (
+                <div style={{ background: "#fff", border: `1px solid #E8E6F2`, borderRadius: 16, padding: "16px 20px", marginBottom: 16 }}>
+                  <p style={{ fontFamily: T.sans, fontSize: 13, fontWeight: 600, color: T.body, margin: "0 0 10px" }}>How much time do you have today?</p>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    {["15 min", "30 min", "45 min", "1 hour", "3 hours", "5 hours+"].map(opt => {
+                      const sel = dailyTimeAvailable === opt;
+                      return (
+                        <button key={opt} onClick={async () => {
+                          if (dailyTimeGenerating) return;
+                          setDailyTimeAvailable(opt);
+                          setDailyTimeGenerating(true);
 
-                {/* ── NOTE — compact strip at bottom of card ── */}
-                <DayNoteField dayNum={dayNum} dayNotes={dayNotes} setDayNotes={setDayNotes} />
-              </div>
-              {!status && (
-                <div style={{ background: T.purpleL, border: `1px solid ${T.purpleMid}`, borderRadius: 12, padding: "16px 18px", marginBottom: 14, display: "flex", alignItems: "center", gap: 14 }}>
-                  <div style={{ width: 36, height: 36, borderRadius: "50%", background: T.grad, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                    <span style={{ fontFamily: T.serif, fontSize: 15, color: "#fff", fontStyle: "italic" }}>N</span>
-                  </div>
-                  <div style={{ flex: 1 }}>
-                    <p style={{ fontFamily: T.sans, fontSize: 15, color: T.purpleD, margin: "0 0 8px", lineHeight: 1.5 }}>
-                      Not sure how to approach this task? Want to talk through your goals? Brainstorm with Nora, your thinking partner.
-                    </p>
-                    <button onClick={() => setNoraOpen(true)}
-                      style={{ background: T.purple, border: "none", borderRadius: 8, padding: "7px 16px", fontFamily: T.sans, fontSize: 13, fontWeight: 600, color: "#fff", cursor: "pointer" }}>
-                      Talk to Nora →
-                    </button>
+                          // Map time slots to task count — per-task time is now API-decided
+                          const timeConfig = {
+                            "15 min": { count: 1, totalMin: 15, stepsPerTask: "1-2" },
+                            "30 min": { count: 1, totalMin: 30, stepsPerTask: "2-4" },
+                            "45 min": { count: 1, totalMin: 45, stepsPerTask: "3-5" },
+                            "1 hour": { count: 2, totalMin: 60, stepsPerTask: "2-4" },
+                            "3 hours": { count: 4, totalMin: 180, stepsPerTask: "3-5" },
+                            "5 hours+": { count: 5, totalMin: 300, stepsPerTask: "4-6" },
+                          };
+                          const cfg = timeConfig[opt] || timeConfig["30 min"];
+
+                          try {
+                            if (cfg.count === 1) {
+                              // Single task: regenerate with exact time constraint
+                              const timeHint = `TIME AVAILABLE TODAY: ${opt}. Generate exactly 1 task that takes exactly ${opt}. Include ${cfg.stepsPerTask} concrete steps. Set the "time" field to exactly "${opt}".`;
+                              const t = await generateNextDayTask(plan, dayNum - 1, dayStatus[dayNum - 1] || 'done', timeHint, noraInsight, dayTasks, dayStatus, dayNotes);
+                              if (t) {
+                                t.time = opt;
+                                t._subtasks = null;
+                                setDayTasks(prev => ({ ...prev, [dayNum]: t }));
+                              }
+                            } else {
+                              // Multiple tasks: let the API decide individual time allocations based on complexity
+                              const timeHint = `TIME AVAILABLE TODAY: ${opt} (${cfg.totalMin} minutes total). Generate exactly ${cfg.count} separate career development tasks. IMPORTANT: Allocate time per task based on complexity — simpler tasks (like a quick read or reflection) should get less time, deeper tasks (like building something or writing a piece of work) should get more. The only constraint: all task "time" fields must sum to exactly ${cfg.totalMin} minutes. Each task must have ${cfg.stepsPerTask} steps. Tasks should complement each other and be diverse in type (mix of Apply, Read, Reflect, Tool). HARD RULE: NO AI tool tasks.
+
+Return ONLY valid JSON, no markdown:
+{"tasks":[${Array.from({ length: cfg.count }, () => '{"tag":"Apply|Read|Reflect","time":"X min","title":"...","desc":"...","steps":[...],"whyBase":"..."}').join(",")}]}`;
+                              try {
+                                const res = await fetch("/api/generate", {
+                                  method: "POST",
+                                  headers: { "Content-Type": "application/json" },
+                                  body: JSON.stringify({
+                                    model: "claude-sonnet-4-20250514",
+                                    max_tokens: 3000,
+                                    messages: [{ role: "user", content: (() => {
+                                      const _answers = plan._answers || {};
+                                      const _cl = plan.classification || {};
+                                      const _subRole = _answers.role_detail !== undefined && SUB_ROLE_QUESTIONS[_answers.role] ? SUB_ROLE_QUESTIONS[_answers.role].options[_answers.role_detail]?.text || "" : "";
+                                      const _goalDetail = _answers.goal_detail !== undefined ? ((GOAL_DETAIL_QUESTIONS[_answers.goal])?.options?.[_answers.goal_detail]?.text || "") : "";
+                                      const _goalDir = (_answers.goal_direction || "").trim();
+                                      const _goalStmt = plan._goalStatement || "";
+                                      const _style = _answers.style_outcome_process != null ? (_answers.style_outcome_process < 30 ? "action-oriented" : _answers.style_outcome_process < 50 ? "action-leaning" : _answers.style_outcome_process > 70 ? "understanding-oriented" : "understanding-leaning") : "balanced";
+                                      const _arc = plan.weekArc || {};
+                                      const _wkNum = Math.min(8, Math.ceil(dayNum / 7));
+                                      const _wkTheme = [_arc.w1, _arc.w2, _arc.w3, _arc.w4, _arc.w5, _arc.w6, _arc.w7, _arc.w8][_wkNum - 1] || "Keep building";
+                                      const _dayHist = Array.from({ length: Math.min(dayNum - 1, 7) }, (_, i) => dayNum - 1 - i).filter(d => d >= 1).reverse().map(d => {
+                                        const ds = dayStatus[d]; const dt = dayTasks[d]; const dn = dayNotes[d] || "";
+                                        return `Day ${d}: ${ds === 'done' ? 'DONE' : ds === 'skipped' ? 'SKIPPED' : 'pending'} | ${dt ? `"${dt.title}" [${dt.tag}]` : "unknown"}${dn ? ` | Note: "${dn}"` : ""}`;
+                                      }).join("\n");
+                                      return `Generate ${cfg.count} career development tasks for this person's Day ${dayNum}.
+
+═══ FULL PROFILE ═══
+Profile: ${plan.profileName}
+Role: ${plan.roleName || ROLE_NAMES[_answers.role] || "professional"}${_subRole ? ` (${_subRole})` : ""}
+Seniority: ${SENIORITY_TEXTS[_answers.seniority] || "mid-career"}
+Approach: ${_style}
+What's making it urgent: ${URG_TEXTS[_answers.urgency] || "not specified"}
+Main blockers: ${normalizeBlocker(_answers.blocker).map(b => BLOCKER_TEXTS[b]).filter(Boolean).join("; ") || "not specified"}
+Readiness: ${_cl.readinessLevel || "medium"}
+
+═══ GOAL CONTEXT ═══
+12-month goal: ${_answers.goal_custom || GOAL_TEXTS[_answers.goal] || "move forward"}${_goalDetail ? ` (${_goalDetail})` : ""}${_goalDir ? `\nTarget direction: ${_goalDir}` : ""}${_goalStmt ? `\nNora-refined goal: "${_goalStmt}"` : ""}
+
+═══ THIS WEEK ═══
+Week ${_wkNum} focus: "${_wkTheme}"
+${noraInsight ? `\n═══ NORA COACHING CONTEXT ═══\n${noraInsight.slice(0, 400)}\n` : ""}
+═══ RECENT HISTORY ═══
+${_dayHist || "No previous days yet."}
+
+${timeHint}`;
+                                    })() }],
+                                  }),
+                                });
+                                const data = await res.json();
+                                const text = (data.content || []).map(b => b.text || "").join("");
+                                const start = text.indexOf("{"); const end = text.lastIndexOf("}");
+                                if (start !== -1 && end !== -1) {
+                                  const parsed = JSON.parse(text.slice(start, end + 1));
+                                  if (parsed.tasks?.length >= 1) {
+                                    const fixedTasks = parsed.tasks.slice(0, cfg.count);
+                                    const mainTask = { ...fixedTasks[0], _subtasks: fixedTasks.slice(1) };
+                                    setDayTasks(prev => ({ ...prev, [dayNum]: mainTask }));
+                                  }
+                                }
+                              } catch (innerErr) {
+                                console.error("Multi-task generation failed:", innerErr);
+                                // Fallback: single task for full duration
+                                const t = await generateNextDayTask(plan, dayNum - 1, dayStatus[dayNum - 1] || 'done', `TIME AVAILABLE TODAY: ${opt}. Generate 1 substantial task of ${opt} with ${cfg.stepsPerTask} detailed steps. Set "time" to "${opt}".`, noraInsight, dayTasks, dayStatus, dayNotes);
+                                if (t) { t.time = opt; setDayTasks(prev => ({ ...prev, [dayNum]: t })); }
+                              }
+                            }
+                          } catch (outerErr) {
+                            console.error("Time picker generation failed:", outerErr);
+                          } finally {
+                            setDailyTimeGenerating(false);
+                          }
+                        }}
+                          style={{
+                            fontFamily: T.sans, fontSize: 12, fontWeight: sel ? 700 : 400,
+                            padding: "6px 14px", borderRadius: 20,
+                            border: `1.5px solid ${sel ? T.purple : T.border}`,
+                            background: sel ? T.purpleL : "#fff",
+                            color: sel ? T.purpleD : T.muted,
+                            cursor: dailyTimeGenerating ? "wait" : "pointer",
+                            transition: "all 0.12s",
+                            opacity: dailyTimeGenerating && !sel ? 0.4 : 1,
+                          }}>
+                          {opt}
+                        </button>
+                      );
+                    })}
+                    {dailyTimeGenerating && (
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: 4 }}>
+                        <div style={{ width: 12, height: 12, borderRadius: "50%", border: `2px solid ${T.purpleL}`, borderTop: `2px solid ${T.purple}`, animation: "spin 0.8s linear infinite" }} />
+                        <span style={{ fontFamily: T.sans, fontSize: 12, color: T.muted }}>Building {dailyTimeAvailable} plan…</span>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
 
-              {/* ── COMPLETION — no reflection, marks day directly ── */}
+              {/* ── TASK CARD(S) ── */}
+              {(() => {
+                const allTasks = [task, ...(task._subtasks || [])];
+                const goalIdx2 = plan._answers?.goal ?? -1;
+                const whyLabel2 = [
+                  "Why this moves you toward that role:",
+                  "Why this makes you a stronger candidate:",
+                  "Why this builds toward the pivot:",
+                  "Why this keeps you relevant:",
+                  "Why this builds real confidence:",
+                ][goalIdx2] || "Why this matters:";
+
+                // Compute total time from all task time fields
+                const parseMin = (s) => { if (!s) return 0; const m = s.match(/(\d+)/); return m ? parseInt(m[1]) : 0; };
+                const totalMin = allTasks.reduce((sum, t) => sum + parseMin(t.time), 0);
+                const totalLabel = totalMin >= 60 ? (Math.floor(totalMin / 60) + "h" + (totalMin % 60 ? " " + (totalMin % 60) + "m" : "")) : (totalMin + " min");
+
+                return (
+                  <>
+                    {allTasks.length > 1 && !status && (
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 4px", marginBottom: 8 }}>
+                        <span style={{ fontFamily: T.sans, fontSize: 13, fontWeight: 600, color: T.ink }}>{allTasks.length} tasks for today</span>
+                        <span style={{ fontFamily: T.sans, fontSize: 13, fontWeight: 600, color: T.purple }}>Total: {totalLabel}</span>
+                      </div>
+                    )}
+                    {allTasks.map((t, ti) => {
+                  const tColors = tagColors[t.tag] || tagColors["Read"];
+                  return (
+                    <div key={ti} className="sa-dash-task-card" style={{ background: "#fff", border: `1px solid ${status === 'done' ? "#E8E6F2" : status === 'skipped' ? T.border : "#E8E6F2"}`, borderRadius: 20, padding: "28px 24px", marginBottom: 16, boxShadow: "0 2px 12px rgba(26,23,48,0.05)" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
+                        <span style={{ fontFamily: T.sans, fontSize: 13, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", padding: "5px 12px", background: tColors.bg, color: tColors.text, border: `1.5px solid ${tColors.border}`, borderRadius: 6 }}>{t.tag}</span>
+                        <span style={{ fontFamily: T.sans, fontSize: 14, color: T.muted }}>{t.time}</span>
+                        {ti === 0 && !status && <span style={{ marginLeft: "auto", fontFamily: T.sans, fontSize: 13, fontWeight: 700, color: T.purple, letterSpacing: 0.5 }}>Day {dayNum}{allTasks.length > 1 ? ` · ${allTasks.length} tasks` : ""}</span>}
+                        {ti > 0 && !status && <span style={{ marginLeft: "auto", fontFamily: T.sans, fontSize: 11, fontWeight: 600, color: T.muted, letterSpacing: 0.5 }}>Task {ti + 1} of {allTasks.length}</span>}
+                        {ti === 0 && status === 'done' && <span style={{ marginLeft: "auto", fontFamily: T.sans, fontSize: 13, fontWeight: 600, color: T.purpleD, background: T.purpleL, padding: "4px 12px", borderRadius: 20 }}>Done ✓</span>}
+                        {ti === 0 && status === 'skipped' && <span style={{ marginLeft: "auto", fontFamily: T.sans, fontSize: 13, color: T.muted, background: T.cream, padding: "4px 12px", borderRadius: 20 }}>Skipped</span>}
+                      </div>
+                      <h3 style={{ fontFamily: T.sans, fontSize: 19, fontWeight: 700, color: T.black, margin: "0 0 14px", lineHeight: 1.3 }}>{t.title}</h3>
+                      <p style={{ fontFamily: T.sans, fontSize: 16, color: T.ink, margin: "0 0 18px", lineHeight: 1.85 }}>{t.desc}</p>
+                      <TaskSteps steps={t.steps} initialChecked={(checkedSteps[`${dayNum}_${ti}`] || checkedSteps[dayNum] || {})} onCheckedChange={c => setCheckedSteps(prev => ({ ...prev, [`${dayNum}_${ti}`]: c }))} tagBg={tColors.bg} tagAccent={tColors.text} />
+                      {(t.whyBase || t.why) && (
+                        <div style={{ borderLeft: `3px solid ${tColors.border || T.border}`, paddingLeft: 14 }}>
+                          <p style={{ fontFamily: T.sans, fontSize: 15, color: T.body, margin: 0, lineHeight: 1.75 }}>
+                            <strong style={{ color: T.black, fontSize: 15 }}>{whyLabel2} </strong>{t.whyBase || t.why}
+                          </p>
+                        </div>
+                      )}
+                      {ti === allTasks.length - 1 && (
+                        <DayNoteField dayNum={dayNum} dayNotes={dayNotes} setDayNotes={setDayNotes} />
+                      )}
+                    </div>
+                  );
+                })}
+                  </>
+                );
+              })()}
+              {!status && (
+                <div className="sa-dash-nora-box" style={{ background: "#fff", border: `1px solid #E8E6F2`, borderRadius: 16, padding: "18px 20px", marginBottom: 16, display: "flex", alignItems: "center", gap: 14 }}>
+                  <div style={{ width: 40, height: 40, borderRadius: "50%", background: T.grad, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                    <span style={{ fontFamily: T.serif, fontSize: 16, color: "#fff", fontStyle: "italic" }}>N</span>
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <p style={{ fontFamily: T.sans, fontSize: 13, color: T.body, margin: "0 0 10px", lineHeight: 1.55 }}>
+                      <strong style={{ fontWeight: 600, color: T.purpleD }}>Not sure how to approach this task?</strong>{" "}Brainstorm with Nora. She'll adjust your program based on what you share.
+                    </p>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <button onClick={() => setNoraOpen(true)}
+                        style={{ background: T.purple, border: "none", borderRadius: 8, padding: "7px 16px", fontFamily: T.sans, fontSize: 13, fontWeight: 600, color: "#fff", cursor: "pointer" }}>
+                        Talk to Nora →
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* ── COMPLETION ── */}
               {!status && !showCelebration[dayNum] && (
-                <div style={{ background: T.cream, borderRadius: 12, padding: "18px 20px", border: `1px solid ${T.border}` }}>
-                  <p style={{ fontFamily: T.serif, fontSize: 19, fontWeight: 400, color: T.black, margin: "0 0 16px", lineHeight: 1.3 }}>Did you complete today's task?</p>
+                <div style={{ background: "#fff", borderRadius: 16, padding: "20px 22px", border: `1px solid #E8E6F2` }}>
+                  <p style={{ fontFamily: T.sans, fontSize: 15, fontWeight: 600, color: T.ink, margin: "0 0 16px" }}>Done with today's task?</p>
                   <div style={{ display: "flex", gap: 10 }}>
-                    <button onClick={() => {
-                      setShowCelebration(prev => ({ ...prev, [dayNum]: true }));
-                      setTimeout(() => {
-                        setShowCelebration(prev => ({ ...prev, [dayNum]: false }));
-                        markDay(dayNum, 'done');
-                      }, 1400);
-                    }}
-                      style={{ flex: 1, background: T.black, color: "#fff", border: "none", borderRadius: 10, padding: "14px 0", fontFamily: T.sans, fontSize: 16, fontWeight: 600, cursor: "pointer", letterSpacing: -0.2 }}>
-                      Yes, done ✓
+                    <button onClick={() => markDay(dayNum, 'done')}
+                      style={{ flex: 1, background: T.purple, color: "#fff", border: "none", borderRadius: 12, padding: "15px 0", fontFamily: T.sans, fontSize: 16, fontWeight: 600, cursor: "pointer", letterSpacing: -0.2, transition: "transform 0.12s", boxShadow: "0 2px 10px rgba(124,111,159,0.3)" }}
+                      onMouseEnter={e => e.currentTarget.style.transform = "translateY(-1px)"}
+                      onMouseLeave={e => e.currentTarget.style.transform = "translateY(0)"}>
+                      Done ✓
                     </button>
                     <button onClick={() => markDay(dayNum, 'skipped')}
-                      style={{ flex: 1, background: "#fff", color: T.muted, border: `1px solid ${T.border}`, borderRadius: 10, padding: "14px 0", fontFamily: T.sans, fontSize: 16, cursor: "pointer" }}>
-                      Not yet
+                      style={{ flex: 0.6, background: "#F8F7FC", color: T.muted, border: `1px solid #E8E6F2`, borderRadius: 12, padding: "15px 0", fontFamily: T.sans, fontSize: 15, cursor: "pointer", transition: "background 0.12s" }}
+                      onMouseEnter={e => e.currentTarget.style.background = "#F0EFF8"}
+                      onMouseLeave={e => e.currentTarget.style.background = "#F8F7FC"}>
+                      Skip
                     </button>
                   </div>
                 </div>
@@ -5724,85 +6184,70 @@ function DashboardScreen({ plan, onBack, startDate }) {
 
               {/* ── COMPLETED STATE ── */}
               {status === 'done' && dayNum < 56 && (
-                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                   {/* Celebration card */}
-                  <div style={{ background: "linear-gradient(135deg, #0a3d2e 0%, #0F6E56 100%)", borderRadius: 14, padding: "20px 22px", border: "1px solid #5DCAA5" }}>
-                    {streakCount === 3 && <p style={{ fontFamily: T.sans, fontSize: 12, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", color: "#5DCAA5", margin: "0 0 6px" }}>3-day streak · The habit is starting.</p>}
-                    {streakCount === 7 && <p style={{ fontFamily: T.sans, fontSize: 12, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", color: "#5DCAA5", margin: "0 0 6px" }}>7 days straight · One full week.</p>}
-                    {streakCount === 14 && <p style={{ fontFamily: T.sans, fontSize: 12, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", color: "#5DCAA5", margin: "0 0 6px" }}>Two weeks · Most people stop here. You didn't.</p>}
-                    {streakCount === 21 && <p style={{ fontFamily: T.sans, fontSize: 12, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", color: "#5DCAA5", margin: "0 0 6px" }}>21 days · This is where it locks in.</p>}
-                    {streakCount === 30 && <p style={{ fontFamily: T.sans, fontSize: 12, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", color: "#5DCAA5", margin: "0 0 6px" }}>30 days · You built something real.</p>}
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-                      <div style={{ flex: 1 }}>
-                        <p style={{ fontFamily: T.serif, fontSize: 20, color: "#fff", margin: "0 0 4px", fontWeight: 400 }}>Day {dayNum} done.{streakCount > 1 ? ` 🔥 ${streakCount}` : " ✓"}</p>
-                        {goalUpdatedDay === dayNum && (
-                          <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: 1.2, textTransform: "uppercase", color: "#5DCAA5", margin: "0 0 6px" }}>Goal updated — tasks reshaped ✓</p>
-                        )}
-                        {note && <p style={{ fontFamily: T.sans, fontSize: 13, color: "rgba(255,255,255,0.65)", margin: "0 0 8px", fontStyle: "italic" }}>"{note}"</p>}
-                        <p style={{ fontFamily: T.sans, fontSize: 13, color: "rgba(255,255,255,0.5)", margin: 0, lineHeight: 1.55 }}>
-                          {ARCHETYPE_COMPLETION[plan.profileName] || "One more day in the program."}
+                  <div style={{ background: "linear-gradient(135deg, #1e1a30 0%, #3a2d70 100%)", borderRadius: 20, padding: "22px 24px" }}>
+                    {streakCount === 3 && <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", color: "rgba(184,176,216,0.6)", margin: "0 0 6px" }}>3-day streak · The habit is starting.</p>}
+                    {streakCount === 7 && <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", color: "rgba(184,176,216,0.6)", margin: "0 0 6px" }}>7 days straight · One full week.</p>}
+                    {streakCount === 14 && <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", color: "rgba(184,176,216,0.6)", margin: "0 0 6px" }}>Two weeks · Most people stop here. You didn't.</p>}
+                    {streakCount === 21 && <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", color: "rgba(184,176,216,0.6)", margin: "0 0 6px" }}>21 days · This is where it locks in.</p>}
+                    {streakCount === 30 && <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", color: "rgba(184,176,216,0.6)", margin: "0 0 6px" }}>30 days · You built something real.</p>}
+                    <p style={{ fontFamily: T.serif, fontSize: 20, color: "#fff", margin: "0 0 4px", fontWeight: 400 }}>Day {dayNum} done.{streakCount > 1 ? ` 🔥 ${streakCount}` : " ✓"}</p>
+                    {goalUpdatedDay === dayNum && (
+                      <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: 1.2, textTransform: "uppercase", color: "rgba(184,176,216,0.5)", margin: "0 0 6px" }}>Goal updated, tasks reshaped ✓</p>
+                    )}
+                    {note && <p style={{ fontFamily: T.sans, fontSize: 13, color: "rgba(255,255,255,0.55)", margin: "0 0 10px", fontStyle: "italic" }}>{note}</p>}
+
+                    {/* Inspirational quote from curated library */}
+                    {dailyQuotes[dayNum] && (
+                      <div style={{ borderTop: "1px solid rgba(255,255,255,0.08)", paddingTop: 12, marginTop: 6 }}>
+                        <p style={{ fontFamily: T.serif, fontSize: 15, color: "rgba(255,255,255,0.65)", margin: "0 0 5px", lineHeight: 1.6, fontStyle: "italic" }}>
+                          {dailyQuotes[dayNum].text}
                         </p>
+
                       </div>
-                      {dayNum < 56 && (
-                        <button
-                          onClick={() => { if (dayTasks[dayNum + 1]) { setActiveDay(dayNum + 1); window.scrollTo({ top: 0, behavior: "smooth" }); } }}
-                          disabled={!dayTasks[dayNum + 1]}
-                          style={{ background: "#5DCAA5", color: "#0a3d2e", border: "none", borderRadius: 10, padding: "12px 18px", fontFamily: T.sans, fontSize: 15, fontWeight: 700, cursor: dayTasks[dayNum + 1] ? "pointer" : "default", flexShrink: 0, opacity: 1, display: "flex", alignItems: "center", gap: 8 }}>
-                          {!dayTasks[dayNum + 1]
-                            ? <><div style={{ width: 14, height: 14, borderRadius: "50%", border: "2px solid rgba(10,61,46,0.25)", borderTop: "2px solid #0a3d2e", animation: "spin 0.8s linear infinite" }} />Day {dayNum + 1}</>
-                            : <>Day {dayNum + 1} →</>
-                          }
-                        </button>
-                      )}
-                    </div>
+                    )}
                   </div>
 
-                  {/* Progress trail — last completed tasks */}
-                  {(() => {
-                    const completedDays = Array.from({length: dayNum}, (_, i) => i + 1)
-                      .filter(d => dayStatus[d] === 'done' && dayTasks[d])
-                      .slice(-5);
-                    if (completedDays.length < 2) return null;
-                    const tagColors2 = { "Tool": "#0F6E56", "Read": "#185FA5", "Apply": T.purpleD, "Reflect": "#92400E" };
-                    return (
-                      <div style={{ background: T.cream, borderRadius: 12, padding: "16px 18px", border: `1px solid ${T.border}` }}>
-                        <p style={{ fontFamily: T.sans, fontSize: 12, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", color: T.muted, margin: "0 0 12px" }}>What you've built so far</p>
-                        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                          {completedDays.map(d => {
-                            const t = dayTasks[d];
-                            const tc = tagColors2[t.tag] || T.purple;
-                            return (
-                              <div key={d} style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
-                                <div style={{ width: 6, height: 6, borderRadius: "50%", background: tc, flexShrink: 0, marginTop: 6 }} />
-                                <div style={{ flex: 1, minWidth: 0 }}>
-                                  <p style={{ fontFamily: T.sans, fontSize: 13, color: T.ink, margin: 0, lineHeight: 1.45 }}>{t.title}</p>
-                                  {dayNotes[d] && <p style={{ fontFamily: T.sans, fontSize: 12, color: T.muted, margin: "2px 0 0", fontStyle: "italic" }}>"{dayNotes[d]}"</p>}
-                                </div>
-                                <span style={{ fontFamily: T.sans, fontSize: 11, color: tc, fontWeight: 700, flexShrink: 0, marginTop: 1 }}>{t.tag}</span>
-                              </div>
-                            );
-                          })}
-                        </div>
+                  {/* Up next */}
+                  {dayNum < 56 && (
+                    <div style={{ background: "#fff", border: `1px solid #E8E6F2`, borderRadius: 16, padding: "18px 20px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+                      <div>
+                        <p style={{ fontFamily: T.sans, fontSize: 12, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", color: T.muted, margin: "0 0 4px" }}>Up next</p>
+                        <p style={{ fontFamily: T.serif, fontSize: 17, color: T.black, margin: 0, fontWeight: 400 }}>
+                          {dayTasks[dayNum + 1] ? `Day ${dayNum + 1}` : `Day ${dayNum + 1} is being prepared…`}
+                        </p>
                       </div>
-                    );
-                  })()}
+                      <button
+                        onClick={() => { if (dayTasks[dayNum + 1]) { setActiveDay(dayNum + 1); } }}
+                        disabled={!dayTasks[dayNum + 1]}
+                        style={{ background: dayTasks[dayNum + 1] ? T.black : T.cream, color: dayTasks[dayNum + 1] ? "#fff" : T.muted, border: "none", borderRadius: 10, padding: "12px 20px", fontFamily: T.sans, fontSize: 15, fontWeight: 600, cursor: dayTasks[dayNum + 1] ? "pointer" : "default", flexShrink: 0, display: "flex", alignItems: "center", gap: 8 }}>
+                        {!dayTasks[dayNum + 1]
+                          ? <><div style={{ width: 14, height: 14, borderRadius: "50%", border: `2px solid ${T.muted}`, borderTop: `2px solid ${T.purple}`, animation: "spin 0.8s linear infinite" }} />Building…</>
+                          : <>Start Day {dayNum + 1} →</>
+                        }
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
 
               {status === 'skipped' && dayNum < 56 && (
-                <div style={{ background: T.cream, borderRadius: 14, padding: "20px 22px", border: `1px solid ${T.border}` }}>
-                  <p style={{ fontFamily: T.sans, fontSize: 12, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", color: T.muted, margin: "0 0 8px" }}>The program adjusted</p>
-                  <p style={{ fontFamily: T.serif, fontSize: 19, color: T.black, margin: "0 0 6px", fontWeight: 400 }}>Tomorrow is shorter. You're still in it.</p>
-                  {note && <p style={{ fontFamily: T.sans, fontSize: 13, color: T.muted, margin: "0 0 8px", fontStyle: "italic" }}>"{note}"</p>}
-                  <p style={{ fontFamily: T.sans, fontSize: 14, color: T.body, margin: "0 0 16px", lineHeight: 1.6 }}>Day {dayNum + 1} has been scaled down based on today. Missing a day isn't the same as stopping — the habit survives skips. Stopping is a choice.</p>
-                  <p style={{ fontFamily: T.sans, fontSize: 13, color: T.muted, margin: "0 0 16px", lineHeight: 1.5 }}>
-                    {streakCount > 0 ? `Your ${streakCount}-day streak is safe. One skip doesn't break it.` : "Your streak is safe. One skip doesn't break it."}
-                  </p>
-                  {dayTasks[dayNum + 1] && (
+                <div style={{ background: "#FAFAF8", borderRadius: 20, padding: "22px 24px", border: `1px solid #E8E6F2` }}>
+                  <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", color: T.muted, margin: "0 0 8px" }}>The program adjusted</p>
+                  <p style={{ fontFamily: T.sans, fontSize: 16, color: T.ink, margin: "0 0 6px", fontWeight: 600 }}>Tomorrow is shorter. You're still in it.</p>
+                  {note && <p style={{ fontFamily: T.sans, fontSize: 13, color: T.muted, margin: "0 0 8px", fontStyle: "italic" }}>{note}</p>}
+                  <p style={{ fontFamily: T.sans, fontSize: 14, color: T.body, margin: "0 0 16px", lineHeight: 1.65 }}>Day {dayNum + 1} has been scaled down based on today. Missing a day isn't the same as stopping.</p>
+                  {dayTasks[dayNum + 1] ? (
                     <button onClick={() => { setActiveDay(dayNum + 1); window.scrollTo({ top: 0, behavior: "smooth" }); }}
-                      style={{ background: T.black, color: "#fff", border: "none", borderRadius: 10, padding: "12px 20px", fontFamily: T.sans, fontSize: 15, fontWeight: 600, cursor: "pointer" }}>
+                      style={{ background: T.purple, color: "#fff", border: "none", borderRadius: 12, padding: "13px 22px", fontFamily: T.sans, fontSize: 15, fontWeight: 600, cursor: "pointer", boxShadow: "0 2px 10px rgba(124,111,159,0.3)" }}>
                       See Day {dayNum + 1} →
                     </button>
+                  ) : (
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 0" }}>
+                      <div style={{ width: 16, height: 16, borderRadius: "50%", border: `2.5px solid #E8E6F2`, borderTop: `2.5px solid ${T.purple}`, animation: "spin 0.8s linear infinite", flexShrink: 0 }} />
+                      <span style={{ fontFamily: T.sans, fontSize: 14, color: T.muted }}>Building your next task...</span>
+                    </div>
                   )}
                 </div>
               )}
@@ -5815,15 +6260,15 @@ function DashboardScreen({ plan, onBack, startDate }) {
                   1: "The first week is the one most people never finish. You finished it.",
                   2: "Two weeks in. The pattern is forming.",
                   3: "Three weeks. The research says habits start here.",
-                  4: "Halfway. The program has your shape now.",
-                  5: "Five weeks of daily motion. That's not normal. That's exceptional.",
-                  6: "Six weeks. You're in the top few percent of people who ever start something like this.",
-                  7: "One week left. The habit is already yours.",
-                  8: "56 days. Done. What you built here doesn't go away.",
+                  4: "A solid month of deliberate motion. This is where it starts to compound.",
+                  5: "Five weeks of showing up. That's real momentum now.",
+                  6: "Six weeks. The habit is yours. The goal is getting closer.",
+                  7: "Seven weeks. You've built something worth protecting.",
+                  8: "The habit is locked in. What you built here doesn't go away.",
                 };
                 return (
                   <div style={{ borderRadius: 16, overflow: "hidden", border: `1px solid ${isDone ? T.purpleMid : T.border}` }}>
-                    {/* Top — week complete */}
+                    {/* Top, week complete */}
                     <div style={{ background: isDone ? T.grad : "#F4F4F6", padding: "24px 24px 20px" }}>
                       <p style={{ fontFamily: T.sans, fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", color: isDone ? "rgba(255,255,255,0.5)" : T.muted, margin: "0 0 8px" }}>Week {wkNum} complete · {doneThisWeek}/7 days</p>
                       <p style={{ fontFamily: T.serif, fontSize: 22, color: isDone ? "#fff" : T.black, margin: "0 0 8px", fontWeight: 400, lineHeight: 1.3 }}>
@@ -5844,7 +6289,7 @@ function DashboardScreen({ plan, onBack, startDate }) {
                         });
                         const wkTotal = Object.values(tagTally).reduce((a, b) => a + b, 0);
                         if (wkTotal === 0) return null;
-                        const tagColors3 = { Apply: "#A78BFA", Read: "#60A5FA", Reflect: "#FBBF24", Tool: "#34D399" };
+                        const tagColors3 = { Apply: "#BDD9C8", Read: "#BACAE8", Reflect: "#C9A090", Tool: "#9ACFC9" };
                         const order = ["Apply", "Read", "Reflect", "Tool"];
                         return (
                           <div style={{ marginTop: 16 }}>
@@ -5867,19 +6312,18 @@ function DashboardScreen({ plan, onBack, startDate }) {
                         );
                       })()}
                     </div>
-                    {/* Bottom — next week unlock */}
+                    {/* Bottom, next week */}
                     {nextWkTheme && wkNum < 8 && (
                       <div style={{ background: isDone ? T.purpleL : T.cream, padding: "18px 24px" }}>
                         <p style={{ fontFamily: T.sans, fontSize: 12, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", color: isDone ? T.purple : T.muted, margin: "0 0 6px" }}>
-                          {isDone ? "🔓 Week " + (wkNum + 1) + " unlocked" : "Week " + (wkNum + 1) + " coming up"}
+                          {isDone ? "Next week's focus" : "Coming up next"}
                         </p>
                         <p style={{ fontFamily: T.serif, fontSize: 18, color: isDone ? T.purpleD : T.black, margin: "0 0 4px", fontWeight: 400, fontStyle: "italic" }}>{nextWkTheme}</p>
                         <p style={{ fontFamily: T.sans, fontSize: 13, color: T.muted, margin: 0, lineHeight: 1.5 }}>
                           {isDone
-                            ? wkNum === 1 ? "Your program adapts from here. Nora shapes what's next based on what you did."
-                            : wkNum === 4 ? "The second half builds on everything you've established."
-                            : "Each week goes deeper than the last."
-                            : `Week ${wkNum + 1} starts fresh. Day ${dayNum + 1} is lighter.`
+                            ? wkNum === 1 ? "Nora adapts what's next based on how this week went."
+                            : "Each week's focus is shaped by what you've built so far."
+                            : `This week's tasks are ready when you are.`
                           }
                         </p>
                       </div>
@@ -5897,40 +6341,44 @@ function DashboardScreen({ plan, onBack, startDate }) {
 
 
 
-      {/* ── PROACTIVE NORA NUDGE — triggered on risk patterns ── */}
+      {/* ── PROACTIVE NORA NUDGE, triggered on risk patterns ── */}
       {(() => {
-        // Don't show if Nora is open, modal is open, or it's Day 1 before anything (Meet Nora handles that)
-        if (noraOpen || weeklyCheckInOpen || arcOpen || progressOpen) return null;
+        // Don't show if Nora is open, modal is open, nudge dismissed, week is generating, task is generating, or celebration is showing
+        if (noraOpen || weeklyCheckInOpen || arcOpen || progressOpen || nudgeDismissed || weekGenerating || generating || celebrationModal) return null;
 
         const doneArr = Object.entries(dayStatus).filter(([,s]) => s === 'done').map(([d]) => +d);
         const skipArr = Object.entries(dayStatus).filter(([,s]) => s === 'skipped').map(([d]) => +d);
         const todayUnlocked = !dayStatus[highestUnlocked]; // today's task is unlocked and not acted on
+        // Don't nag about streaks if the person just completed the previous day (they literally just added to their streak)
+        const prevDayJustDone = highestUnlocked > 1 && dayStatus[highestUnlocked - 1] === 'done';
 
-        // Risk pattern 1: consecutive skips (2+)
-        const recentSkips = skipArr.slice(-2);
-        const doubleSkip = recentSkips.length >= 2 && recentSkips[1] - recentSkips[0] === 1;
+        // Risk pattern 1: the last two *acted* days were both skipped (not just any two skips on record)
+        const actedDays = [...doneArr, ...skipArr].sort((a, b) => a - b);
+        const lastTwo = actedDays.slice(-2);
+        const doubleSkip = lastTwo.length === 2 && lastTwo.every(d => (dayStatus[d] === 'skipped'));
 
-        // Risk pattern 2: Day 4 slump — specifically day 4 unlocked and not done
+        // Risk pattern 2: Day 4 slump, specifically day 4 unlocked and not done
         const day4Slump = highestUnlocked === 4 && !dayStatus[4] && doneArr.length >= 2;
 
-        // Risk pattern 3: Week 2 drift — in days 8–14, fewer than 3 done in week 2
+        // Risk pattern 3: Week 2 drift, in days 8–14, fewer than 3 done in week 2
         const inWeek2 = highestUnlocked >= 8 && highestUnlocked <= 14;
         const week2Done = Array.from({length:7},(_,i)=>i+8).filter(d=>dayStatus[d]==='done').length;
         const week2Drift = inWeek2 && week2Done < 3 && highestUnlocked >= 11; // only nudge midway through
 
-        // Risk pattern 4: streak at risk — has a streak of 3+ but today's task is sitting untouched
-        const streakAtRisk = streakCount >= 3 && todayUnlocked && highestUnlocked > 3;
+        // Risk pattern 4: streak at risk — only when streak is still fragile (3-9 days)
+        // Don't show if they just completed the previous day (they're actively engaged, not drifting)
+        const streakAtRisk = streakCount >= 3 && streakCount <= 9 && todayUnlocked && highestUnlocked > 3 && !prevDayJustDone;
 
         // Pick highest-priority signal
         let nudge = null;
         if (doubleSkip) nudge = {
           headline: "Two days skipped.",
-          body: "That's not a pattern yet — but it could become one. Want to talk through what's getting in the way?",
+          body: "That's not a pattern yet, but it could become one. Want to talk through what's getting in the way?",
           cta: "Talk to Nora",
         };
         else if (day4Slump) nudge = {
           headline: "Day 4 is the wall most people hit.",
-          body: "Not because it's harder — because the novelty's gone and the habit isn't locked yet. Nora can help you through it.",
+          body: "Not because it's harder, because the novelty's gone and the habit isn't locked yet. Nora can help you through it.",
           cta: "Talk it through",
         };
         else if (week2Drift) nudge = {
@@ -5940,32 +6388,38 @@ function DashboardScreen({ plan, onBack, startDate }) {
         };
         else if (streakAtRisk) nudge = {
           headline: `Your ${streakCount}-day streak is on the line.`,
-          body: "Today's task is waiting. Even 5 minutes keeps the chain alive — Nora can help you figure out how to fit it in.",
+          body: "Today's task is waiting. Even 5 minutes keeps the chain alive, Nora can help you figure out how to fit it in.",
           cta: "Talk to Nora",
         };
 
         if (!nudge) return null;
 
         return (
-          <div style={{ position: "fixed", bottom: 28, left: "50%", transform: "translateX(-50%)", width: "calc(100% - 32px)", maxWidth: 560, zIndex: 50, boxShadow: "0 8px 40px rgba(26,23,48,0.22)", animation: "fadeIn 0.4s ease" }}>
-            <div style={{ background: "#fff", borderRadius: 16, border: `1.5px solid ${T.purpleMid}`, padding: "18px 20px", display: "flex", alignItems: "flex-start", gap: 14 }}>
-              <div style={{ width: 38, height: 38, borderRadius: "50%", background: T.grad, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, marginTop: 2 }}>
-                <span style={{ fontFamily: T.serif, fontSize: 15, color: "#fff", fontStyle: "italic" }}>N</span>
+          <div style={{ position: "fixed", bottom: 28, left: "50%", transform: "translateX(-50%)", width: "calc(100% - 32px)", maxWidth: 560, zIndex: 50, boxShadow: "0 8px 40px rgba(26,23,48,0.18)", animation: "fadeIn 0.4s ease" }}>
+            <div style={{ background: "#fff", borderRadius: 20, border: `1px solid #E8E6F2`, padding: "20px 22px", display: "flex", alignItems: "flex-start", gap: 14 }}>
+              <div style={{ width: 40, height: 40, borderRadius: "50%", background: T.grad, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, marginTop: 2 }}>
+                <span style={{ fontFamily: T.serif, fontSize: 16, color: "#fff", fontStyle: "italic" }}>N</span>
               </div>
               <div style={{ flex: 1 }}>
                 <p style={{ fontFamily: T.sans, fontSize: 14, fontWeight: 700, color: T.black, margin: "0 0 3px" }}>{nudge.headline}</p>
                 <p style={{ fontFamily: T.sans, fontSize: 13, color: T.muted, margin: "0 0 12px", lineHeight: 1.55 }}>{nudge.body}</p>
-                <button onClick={() => setNoraOpen(true)}
-                  style={{ background: T.purple, border: "none", borderRadius: 8, padding: "8px 18px", fontFamily: T.sans, fontSize: 13, fontWeight: 600, color: "#fff", cursor: "pointer" }}>
-                  {nudge.cta} →
-                </button>
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <button onClick={() => setNoraOpen(true)}
+                    style={{ background: T.purple, border: "none", borderRadius: 8, padding: "8px 18px", fontFamily: T.sans, fontSize: 13, fontWeight: 600, color: "#fff", cursor: "pointer" }}>
+                    {nudge.cta} →
+                  </button>
+                  <button onClick={() => setNudgeDismissed(true)}
+                    style={{ background: "none", border: `1px solid ${T.border}`, borderRadius: 8, padding: "8px 14px", fontFamily: T.sans, fontSize: 13, color: T.muted, cursor: "pointer" }}>
+                    No, I'm good
+                  </button>
+                </div>
               </div>
             </div>
           </div>
         );
       })()}
 
-      {/* ── MEET NORA — goal clarification prompt on first dashboard open ── */}
+      {/* ── MEET NORA, goal clarification prompt on first dashboard open ── */}
       {storageLoaded && !noraDismissed && highestUnlocked === 1 && !Object.values(Object.fromEntries(Object.entries(dayStatus))).some(s => s === 'done' || s === 'skipped') && (
         <div style={{
           position: "fixed", inset: 0, zIndex: 50,
@@ -5974,7 +6428,7 @@ function DashboardScreen({ plan, onBack, startDate }) {
           display: "flex", alignItems: "center", justifyContent: "center",
           padding: "24px 16px",
           animation: "fadeIn 0.35s ease",
-        }}>
+        }} onClick={e => { if (e.target === e.currentTarget) setNoraDismissed(true); }}>
           <div style={{
             width: "100%", maxWidth: 520,
             background: "linear-gradient(155deg, #1a1630 0%, #231e3d 55%, #120d26 100%)",
@@ -5999,7 +6453,7 @@ function DashboardScreen({ plan, onBack, startDate }) {
               borderRadius: "50%", width: 28, height: 28,
               display: "flex", alignItems: "center", justifyContent: "center",
               fontSize: 13, color: "rgba(255,255,255,0.45)", cursor: "pointer", lineHeight: 1,
-              zIndex: 1,
+              zIndex: 10,
             }}>✕</button>
 
             <div style={{ padding: "40px 40px 36px", position: "relative", zIndex: 1 }}>
@@ -6037,7 +6491,7 @@ function DashboardScreen({ plan, onBack, startDate }) {
                 color: "rgba(255,255,255,0.55)", lineHeight: 1.75,
                 margin: "0 0 32px",
               }}>
-                Your plan is built on your quiz answers. Nora can make it sharper — clarify what you actually want, adjust the direction, reshape the tasks. Two minutes now means a better program for the next 8 weeks.
+                Your plan is built on your quiz answers. Nora can make it sharper, clarify what you actually want, adjust the direction, reshape the tasks. Two minutes now means a better program towards your goal.
               </p>
 
               {/* CTAs */}
@@ -6076,94 +6530,175 @@ function DashboardScreen({ plan, onBack, startDate }) {
       {arcOpen && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: "24px 16px" }}
           onClick={e => { if (e.target === e.currentTarget) setArcOpen(false); }}>
-          <div style={{ width: "100%", maxWidth: 600, background: "#fff", borderRadius: 20, maxHeight: "85vh", display: "flex", flexDirection: "column", overflow: "hidden" }}>
-            <div style={{ padding: "18px 20px 14px", borderBottom: `1px solid ${T.border}`, display: "flex", alignItems: "flex-start", justifyContent: "space-between", flexShrink: 0 }}>
-              <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ width: "100%", maxWidth: 420, background: "#F8F7FC", borderRadius: 24, maxHeight: "88vh", display: "flex", flexDirection: "column", overflow: "hidden", boxShadow: "0 24px 64px rgba(0,0,0,0.25)" }}>
+
+            {/* Header */}
+            <div style={{ padding: "20px 22px 16px", background: T.grad, borderRadius: "24px 24px 0 0", display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
+              <div style={{ flex: 1, minWidth: 0, paddingRight: 12 }}>
+                <p style={{ fontFamily: T.serif, fontSize: 22, fontWeight: 400, color: "#fff", margin: "0 0 8px", lineHeight: 1.2 }}>Goal map</p>
                 {(() => {
-                  const goalTexts = GOAL_TEXTS;
-                  const goalText = (plan._answers?.goal_custom || goalTexts[plan._answers?.goal]);
-                  return goalText ? (
-                    <div style={{ marginBottom: 14, background: "linear-gradient(135deg, #1e1a2e 0%, #2a2240 100%)", borderRadius: 10, padding: "14px 16px" }}>
-                      <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", color: "rgba(255,255,255,0.4)", margin: "0 0 4px" }}>12-month goal</p>
-                      <p style={{ fontFamily: T.serif, fontSize: 17, color: "#fff", margin: "0 0 6px", lineHeight: 1.4, fontWeight: 400 }}>{goalText}</p>
-                      <button onClick={() => { setArcOpen(false); setShowGoalEdit(true); }}
-                        style={{ background: "none", border: "none", fontFamily: T.sans, fontSize: 12, color: "rgba(255,255,255,0.45)", cursor: "pointer", padding: 0, textDecoration: "underline" }}>
-                        Change goal →
-                      </button>
+                  const rawGoalText = plan._answers?.goal_custom || GOAL_TEXTS[plan._answers?.goal];
+                  const displayGoal = (noraChangeMade && goalStatement) ? goalStatement : rawGoalText;
+                  return displayGoal ? (
+                    <div style={{ background: "rgba(255,255,255,0.08)", borderRadius: 8, padding: "8px 12px", border: "1px solid rgba(255,255,255,0.12)" }}>
+                      <p style={{ fontFamily: T.sans, fontSize: 10, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", color: "rgba(255,255,255,0.35)", margin: "0 0 3px" }}>12-month goal</p>
+                      <p style={{ fontFamily: T.sans, fontSize: 13, color: "rgba(255,255,255,0.8)", margin: 0, lineHeight: 1.4, fontStyle: "italic" }}>{displayGoal}</p>
                     </div>
                   ) : null;
                 })()}
-                <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", color: T.muted, margin: "0 0 1px" }}>8-week program</p>
-                <p style={{ fontFamily: T.sans, fontSize: 13, color: T.muted, margin: 0 }}>Tap any week to edit its focus</p>
               </div>
-              <button onClick={() => setArcOpen(false)} style={{ background: "none", border: "none", fontSize: 20, color: T.muted, cursor: "pointer", padding: "0 0 0 12px", lineHeight: 1, flexShrink: 0 }}>×</button>
+              <button onClick={() => setArcOpen(false)} style={{ background: "rgba(255,255,255,0.12)", border: "none", borderRadius: "50%", width: 30, height: 30, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, color: "rgba(255,255,255,0.6)", cursor: "pointer", flexShrink: 0 }}>✕</button>
             </div>
-            <div style={{ flex: 1, overflowY: "auto", padding: "16px 20px 32px", display: "flex", flexDirection: "column", gap: 8 }}>
-              {weekThemes56.map((theme, i) => {
-                const w = i + 1;
-                const wStart = i * 7 + 1;
-                const isCurr = w === currentWeek;
-                const isPast = w < currentWeek;
-                const wDone = Array.from({length:7},(_,j)=>wStart+j).filter(d=>dayStatus[d]==='done').length;
-                return (
-                  <div key={w} style={{ padding: "12px 14px", borderRadius: 10, background: isCurr ? T.purpleL : isPast ? T.cream : "#F9F9F9", border: `1px solid ${isCurr ? T.purpleMid : T.border}`, opacity: w > currentWeek + 1 ? 0.5 : 1 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
-                          <span style={{ fontFamily: T.sans, fontSize: 13, fontWeight: 700, color: isCurr ? T.purple : isPast ? "#0F6E56" : T.muted, letterSpacing: 1, textTransform: "uppercase", flexShrink: 0 }}>Week {w}</span>
-                          {isPast && <span style={{ fontFamily: T.sans, fontSize: 13, color: "#0F6E56" }}>{wDone}/7 ✓</span>}
-                          {isCurr && <span style={{ fontFamily: T.sans, fontSize: 13, color: T.purple }}>current · {wDone}/7</span>}
+
+            {/* Scrollable map */}
+            <div style={{ flex: 1, overflowY: "auto", padding: "28px 20px 40px" }}>
+              {(() => {
+                // 8 unique emojis — one per week, never repeating
+                const WEEK_EMOJIS = ["🌱","🔍","⚡","🤝","🗺️","🚀","✨","🎯"];
+
+                // Layout: node is 64px, container width ~380px. Left node centre ≈ 56, right ≈ 324
+                const NODE_R = 32; // radius
+                const LEFT_CX  = 56;
+                const RIGHT_CX = 324;
+                const NODE_GAP = 96; // px between node centres vertically
+
+                return weekThemes56.map((theme, i) => {
+                  const w = i + 1;
+                  const wStart = i * 7 + 1;
+                  const isPast = w < currentWeek;
+                  const isCurr = w === currentWeek;
+                  const isFut  = w > currentWeek;
+                  const wDone  = Array.from({length:7},(_,j)=>wStart+j).filter(d=>dayStatus[d]==='done').length;
+                  const isRight = i % 2 === 0; // even → right side, odd → left side
+                  const emoji = WEEK_EMOJIS[i] || "⭐";
+
+                  const nodeColor  = isPast ? "#6C60C2" : isCurr ? "#7c6f9f" : "#C8C4DC";
+                  const nodeBg     = isPast ? "linear-gradient(135deg,#6C60C2,#8B7FD4)" : isCurr ? "linear-gradient(135deg,#7c6f9f,#9B8FD0)" : "#EDE9F8";
+                  const textColor  = isFut ? T.muted : T.ink;
+                  const numColor   = isPast ? "#6C60C2" : isCurr ? T.purple : T.muted;
+                  const pathColor  = isPast ? "#6C60C2" : "#C8C4DC";
+
+                  // The connector SVG sits between this node and the next
+                  // Connects from: bottom-centre of current node → top-centre of next node
+                  // Current node centre X: isRight → RIGHT_CX, else LEFT_CX
+                  // Next node centre X:    isRight → LEFT_CX,  else RIGHT_CX
+                  const fromX = isRight ? RIGHT_CX : LEFT_CX;
+                  const toX   = isRight ? LEFT_CX  : RIGHT_CX;
+                  const svgW  = 380;
+                  const svgH  = 72;
+                  // Cubic bezier: start at (fromX, 0), end at (toX, svgH)
+                  // Control points push the curve outward for a nice S
+                  const cp1x = fromX;
+                  const cp1y = svgH * 0.45;
+                  const cp2x = toX;
+                  const cp2y = svgH * 0.55;
+
+                  return (
+                    <div key={w}>
+                      {/* Node row */}
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: isRight ? "flex-end" : "flex-start" }}>
+                        {/* Text label on the opposite side */}
+                        <div style={{
+                          flex: 1,
+                          textAlign: isRight ? "left" : "right",
+                          paddingRight: isRight ? 0 : 14,
+                          paddingLeft:  isRight ? 14 : 0,
+                          order: isRight ? 1 : 2,
+                        }}>
+                          <p style={{ fontFamily: T.sans, fontSize: 12, fontWeight: 700, color: numColor, margin: "0 0 3px", letterSpacing: 1, textTransform: "uppercase" }}>Week {w}</p>
+                          <p style={{ fontFamily: T.sans, fontSize: 14, color: textColor, margin: 0, lineHeight: 1.4, fontWeight: isCurr ? 600 : 400 }}>{theme}</p>
+                          {isPast && <p style={{ fontFamily: T.sans, fontSize: 12, color: "#6C60C2", margin: "4px 0 0", fontWeight: 600 }}>{wDone}/7 ✓</p>}
+                          {isCurr && <p style={{ fontFamily: T.sans, fontSize: 12, color: T.purple, margin: "4px 0 0", fontWeight: 600 }}>You are here · {wDone}/7</p>}
                         </div>
-                        <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
-                          <p style={{ fontFamily: T.sans, fontSize: 14, color: isCurr ? T.ink : isPast ? T.body : T.muted, margin: 0, lineHeight: 1.5, fontWeight: isCurr ? 500 : 400 }}>{theme}</p>
-                          {!isPast && (
-                            <button onClick={() => { setWeekFocusEdit(prev => ({ ...prev, [w]: !prev[w] })); setWeekFocusInput(prev => ({ ...prev, [w]: prev[w] || theme })); }}
-                              style={{ background: "none", border: "none", fontFamily: T.sans, fontSize: 13, color: T.purple, cursor: "pointer", padding: 0, textDecoration: "underline", flexShrink: 0 }}>
-                              {weekFocusEdit?.[w] ? "cancel" : "edit"}
-                            </button>
-                          )}
+
+                        {/* Node circle */}
+                        <div style={{
+                          width: 64, height: 64, borderRadius: "50%",
+                          background: nodeBg,
+                          border: isCurr ? `3px solid ${T.purple}` : isPast ? "3px solid #6C60C2" : `2px solid ${nodeColor}`,
+                          display: "flex", alignItems: "center", justifyContent: "center",
+                          flexShrink: 0, position: "relative", zIndex: 2,
+                          boxShadow: isCurr ? `0 0 0 5px rgba(124,111,159,0.2), 0 4px 16px rgba(108,96,194,0.3)` : isPast ? "0 2px 8px rgba(108,96,194,0.2)" : "none",
+                          order: isRight ? 2 : 1,
+                        }}>
+                          {isPast
+                            ? <span style={{ fontSize: 24, color: "#fff", fontWeight: 700 }}>✓</span>
+                            : <span style={{ fontSize: isCurr ? 26 : 20, filter: isFut ? "grayscale(0.5) opacity(0.5)" : "none" }}>{emoji}</span>
+                          }
                         </div>
                       </div>
+
+                      {/* SVG connector to next node */}
+                      {i < weekThemes56.length - 1 && (
+                        <svg width={svgW} height={svgH} viewBox={`0 0 ${svgW} ${svgH}`} style={{ display: "block", margin: "0 auto", overflow: "visible" }}>
+                          <path
+                            d={`M ${fromX} 0 C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${toX} ${svgH}`}
+                            stroke={pathColor} strokeWidth="2.5" strokeDasharray="7 5"
+                            fill="none" strokeLinecap="round"
+                          />
+                        </svg>
+                      )}
                     </div>
-                    {!isPast && weekFocusEdit?.[w] && (
-                      <div style={{ marginTop: 10 }}>
-                        <input value={weekFocusInput?.[w] || ""} onChange={e => setWeekFocusInput(prev => ({ ...prev, [w]: e.target.value }))}
-                          placeholder="e.g. Build stakeholder visibility…"
-                          style={{ width: "100%", padding: "9px 12px", border: `1px solid ${T.purpleMid}`, borderRadius: 8, fontFamily: T.sans, fontSize: 14, color: T.black, outline: "none", boxSizing: "border-box", background: "#fff", marginBottom: 8 }}
-                        />
-                        <button
-                          disabled={!(weekFocusInput?.[w] || "").trim() || goalUpdating}
-                          onClick={async () => {
-                            const newFocus = (weekFocusInput?.[w] || "").trim();
-                            if (!newFocus) return;
-                            if (isCurr) {
-                              setWeekGoalOverride(newFocus);
-                              setGoalUpdating(true);
-                              const wkStartDay = (currentWeek - 1) * 7 + 1;
-                              const remainingDays = Array.from({ length: 7 }, (_, j) => wkStartDay + j).filter(d => d > highestUnlocked && d <= wkStartDay + 6);
-                              if (remainingDays.length > 0) {
-                                const newTasks = {};
-                                for (const d of remainingDays) {
-                                  const t = await generateNextDayTask(plan, d - 1, dayStatus[d - 1] || 'done', `Week focus: ${newFocus}`, noraInsight, dayTasks, dayStatus, dayNotes);
-                                  if (t) newTasks[d] = t;
-                                }
-                                setDayTasks(prev => ({ ...prev, ...newTasks }));
-                              }
-                              setGoalUpdating(false);
-                            } else {
-                              if (!plan.weekArc) plan.weekArc = {};
-                              plan.weekArc[`w${w}`] = newFocus;
-                            }
-                            setWeekFocusEdit(prev => ({ ...prev, [w]: false }));
-                          }}
-                          style={{ width: "100%", background: (weekFocusInput?.[w] || "").trim() && !goalUpdating ? T.purple : "#CCC", color: "#fff", border: "none", borderRadius: 8, padding: "10px 0", fontFamily: T.sans, fontSize: 14, fontWeight: 600, cursor: (weekFocusInput?.[w] || "").trim() && !goalUpdating ? "pointer" : "default" }}>
-                          {goalUpdating && isCurr ? "Regenerating…" : isCurr ? "Save + regenerate remaining days" : "Save for this week"}
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
+                  );
+                });
+              })()}
+
+              {/* Tree destination — 12-month goal */}
+              <div style={{ textAlign: "center", marginTop: 8 }}>
+                <div style={{ width: 88, height: 88, borderRadius: "50%", background: "#fff", border: "3px solid #34D072", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 12px", boxShadow: "0 4px 24px rgba(45,156,95,0.35), 0 0 0 6px rgba(52,208,114,0.10)" }}>
+                  <svg width="56" height="56" viewBox="0 0 56 56" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <defs>
+                      <linearGradient id="trkG" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor="#7A5230" />
+                        <stop offset="100%" stopColor="#5C3A1E" />
+                      </linearGradient>
+                    </defs>
+                    {/* Roots */}
+                    <path d="M24 47 Q19 50 15 49" stroke="#6B4020" strokeWidth="1.5" strokeLinecap="round" fill="none" />
+                    <path d="M32 47 Q37 50 41 49" stroke="#6B4020" strokeWidth="1.5" strokeLinecap="round" fill="none" />
+                    <path d="M25 48 Q21 52 17 51" stroke="#5C3518" strokeWidth="1" strokeLinecap="round" fill="none" />
+                    <path d="M31 48 Q35 52 39 51" stroke="#5C3518" strokeWidth="1" strokeLinecap="round" fill="none" />
+                    {/* Trunk */}
+                    <path d="M25 48 Q25 40 24 34 Q23.5 30 25 27 L31 27 Q32.5 30 32 34 Q31 40 31 48 Z" fill="url(#trkG)" />
+                    <path d="M27 46 Q27.5 40 27 35" stroke="rgba(255,255,255,0.12)" strokeWidth="0.8" fill="none" />
+                    {/* Main branches */}
+                    <path d="M25 30 Q18 25 12 22" stroke="#6B4020" strokeWidth="2.5" strokeLinecap="round" fill="none" />
+                    <path d="M31 30 Q38 25 44 22" stroke="#6B4020" strokeWidth="2.5" strokeLinecap="round" fill="none" />
+                    <path d="M26 28 Q22 22 18 17" stroke="#6B4020" strokeWidth="2" strokeLinecap="round" fill="none" />
+                    <path d="M30 28 Q34 22 38 17" stroke="#6B4020" strokeWidth="2" strokeLinecap="round" fill="none" />
+                    <path d="M28 27 Q28 20 28 14" stroke="#6B4020" strokeWidth="2" strokeLinecap="round" fill="none" />
+                    {/* Sub-branches */}
+                    <path d="M12 22 Q9 18 8 15" stroke="#7A5230" strokeWidth="1.3" strokeLinecap="round" fill="none" />
+                    <path d="M44 22 Q47 18 48 15" stroke="#7A5230" strokeWidth="1.3" strokeLinecap="round" fill="none" />
+                    <path d="M18 17 Q14 14 13 10" stroke="#7A5230" strokeWidth="1.2" strokeLinecap="round" fill="none" />
+                    <path d="M38 17 Q42 14 43 10" stroke="#7A5230" strokeWidth="1.2" strokeLinecap="round" fill="none" />
+                    {/* Canopy — deep to bright, layered for lush feel */}
+                    <ellipse cx="28" cy="17" rx="22" ry="14" fill="#14733A" />
+                    <ellipse cx="14" cy="18" rx="10" ry="8" fill="#18843F" />
+                    <ellipse cx="42" cy="18" rx="10" ry="8" fill="#18843F" />
+                    <ellipse cx="28" cy="15" rx="19" ry="12" fill="#1D9A4A" />
+                    <ellipse cx="20" cy="13" rx="11" ry="8" fill="#22A854" />
+                    <ellipse cx="36" cy="13" rx="11" ry="8" fill="#22A854" />
+                    <ellipse cx="28" cy="11" rx="15" ry="9" fill="#2BBD5E" />
+                    <ellipse cx="24" cy="9" rx="10" ry="7" fill="#35D06A" />
+                    <ellipse cx="32" cy="9" rx="10" ry="7" fill="#35D06A" />
+                    <ellipse cx="28" cy="7" rx="9" ry="6" fill="#42E278" />
+                    <ellipse cx="28" cy="5" rx="6" ry="4.5" fill="#58F08E" />
+                    {/* Bright crown tip */}
+                    <ellipse cx="27" cy="4" rx="3.5" ry="2.5" fill="#78F5A8" />
+                    {/* Light dappling */}
+                    <ellipse cx="22" cy="8" rx="4" ry="2" fill="rgba(255,255,255,0.2)" transform="rotate(-15 22 8)" />
+                    <ellipse cx="34" cy="6" rx="3" ry="1.5" fill="rgba(255,255,255,0.15)" transform="rotate(10 34 6)" />
+                    <ellipse cx="16" cy="15" rx="3" ry="1.5" fill="rgba(255,255,255,0.12)" />
+                    <ellipse cx="40" cy="14" rx="3" ry="1.5" fill="rgba(255,255,255,0.10)" />
+                    <ellipse cx="28" cy="12" rx="5" ry="2" fill="rgba(255,255,255,0.08)" transform="rotate(-5 28 12)" />
+                  </svg>
+                </div>
+                <p style={{ fontFamily: T.serif, fontSize: 16, color: T.black, margin: "0 0 4px", fontWeight: 400 }}>12-month goal</p>
+                <p style={{ fontFamily: T.sans, fontSize: 13, color: T.body, margin: 0, lineHeight: 1.5, maxWidth: 260, marginLeft: "auto", marginRight: "auto" }}>
+                  {(() => { const g = plan._answers?.goal_custom || GOAL_TEXTS[plan._answers?.goal]; return (noraChangeMade && goalStatement) ? goalStatement : g; })()}
+                </p>
+              </div>
             </div>
           </div>
         </div>
@@ -6195,11 +6730,11 @@ function DashboardScreen({ plan, onBack, startDate }) {
                 return (
                   <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 16px", background: T.purpleL, borderRadius: 12, border: `1px solid ${T.purpleMid}50`, marginBottom: 20 }}>
                     <div style={{ width: 40, height: 40, borderRadius: "50%", background: pb.bg || T.purpleL, border: `1.5px solid ${pb.border || T.purpleMid}`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                      <span style={{ fontFamily: T.serif, fontSize: 14, color: pb.color || T.purpleD, fontStyle: "italic", fontWeight: 400 }}>{plan.profileName?.charAt(4) || "A"}</span>
+                      <span style={{ fontFamily: T.serif, fontSize: 14, color: pb.color || T.purpleD, fontStyle: "italic", fontWeight: 400 }}>{(plan.name || "").trim().charAt(0).toUpperCase() || "?"}</span>
                     </div>
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <p style={{ fontFamily: T.sans, fontSize: 14, fontWeight: 700, color: T.black, margin: "0 0 2px" }}>{plan.name ? `${plan.name}, ${plan.profileName}` : plan.profileName}</p>
-                      {tagline && <p style={{ fontFamily: T.sans, fontSize: 13, color: T.body, margin: 0, lineHeight: 1.5 }}>{tagline}</p>}
+                      <p style={{ fontFamily: T.sans, fontSize: 13, fontWeight: 700, color: T.muted, margin: "0 0 2px", letterSpacing: 1.2, textTransform: "uppercase" }}>Your progress</p>
+                      {tagline && <p style={{ fontFamily: T.sans, fontSize: 14, color: T.ink, margin: 0, lineHeight: 1.5 }}>{plan.name ? `${plan.name}, ${tagline.charAt(0).toLowerCase()}${tagline.slice(1)}` : tagline}</p>}
                     </div>
                   </div>
                 );
@@ -6209,6 +6744,7 @@ function DashboardScreen({ plan, onBack, startDate }) {
                 const totalSkipped = Object.values(dayStatus).filter(s => s === 'skipped').length;
                 const completionRate = (totalDone + totalSkipped) > 0 ? Math.round((totalDone / (totalDone + totalSkipped)) * 100) : 0;
                 return (
+                  <>
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 10, marginBottom: 24 }}>
                     {[
                       { val: totalDone, label: "days done" },
@@ -6220,6 +6756,109 @@ function DashboardScreen({ plan, onBack, startDate }) {
                         <p style={{ fontFamily: T.sans, fontSize: 12, color: T.muted, margin: 0, textTransform: "uppercase", letterSpacing: 1 }}>{s.label}</p>
                       </div>
                     ))}
+                  </div>
+                  {/* Acts highlight in progress modal */}
+                  <div style={{ background: "linear-gradient(135deg, #1e1a2e 0%, #2d2650 100%)", borderRadius: 14, padding: "18px 20px", marginBottom: 24, display: "flex", alignItems: "center", gap: 16, border: "1px solid rgba(155,143,224,0.3)" }}>
+                    <svg width="44" height="32" viewBox="0 0 48 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+                      <ellipse cx="24" cy="27" rx="13" ry="4.5" fill="#92640a" stroke="#c8860e" strokeWidth="1"/>
+                      <rect x="11" y="20" width="26" height="7" fill="#92640a"/>
+                      <ellipse cx="24" cy="20" rx="13" ry="4.5" fill="#d4900f" stroke="#f0b429" strokeWidth="1"/>
+                      <ellipse cx="24" cy="18" rx="13" ry="4.5" fill="#7a5208" stroke="#c8860e" strokeWidth="1"/>
+                      <rect x="11" y="11" width="26" height="7" fill="#7a5208"/>
+                      <ellipse cx="24" cy="11" rx="13" ry="4.5" fill="#c8860e" stroke="#f0c048" strokeWidth="1"/>
+                      <ellipse cx="24" cy="9" rx="13" ry="4.5" fill="#5c3c06" stroke="#c8860e" strokeWidth="1"/>
+                      <rect x="11" y="2" width="26" height="7" fill="#5c3c06"/>
+                      <ellipse cx="24" cy="2" rx="13" ry="4.5" fill="#f0b429" stroke="#fad568" strokeWidth="1.5"/>
+                      <ellipse cx="20" cy="1.2" rx="5" ry="1.5" fill="rgba(255,255,255,0.22)" transform="rotate(-10 20 1.2)"/>
+                    </svg>
+                    <div>
+                      <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", color: "rgba(240,180,41,0.8)", margin: "0 0 3px" }}>Total Creds</p>
+                      <p style={{ fontFamily: T.serif, fontSize: 34, fontWeight: 400, color: "#fad568", margin: 0, lineHeight: 1 }}>{cashPot} <span style={{ fontSize: 18, fontWeight: 300, opacity: 0.6 }}>Cr</span></p>
+                      <p style={{ fontFamily: T.sans, fontSize: 12, color: "rgba(255,255,255,0.4)", margin: "4px 0 0", lineHeight: 1.5 }}>Each completed day moves you forward. These add up.</p>
+                    </div>
+                  </div>
+                  </>
+                );
+              })()}
+
+              {/* ── MOVEMENT OVER TIME — BUCKETS ── */}
+              {(() => {
+                const doneDaysTotal = Object.values(dayStatus).filter(s => s === 'done').length;
+                if (doneDaysTotal < 2) return null;
+
+                const TAGS = ['Apply', 'Read', 'Reflect', 'Tool'];
+                const TAG_COLORS   = { Apply: "#3A6B50", Read: "#3B55A0", Reflect: "#7A3D2E", Tool: "#1A6B62" };
+                const TAG_FILLS    = { Apply: "#E8F4EE", Read: "#EEF2FB", Reflect: "#F5EFEB", Tool: "#EDF7F6" };
+                const TAG_LABELS   = { Apply: "Apply", Read: "Read", Reflect: "Reflect", Tool: "Tool" };
+
+                const counts = { Apply: 0, Read: 0, Reflect: 0, Tool: 0 };
+                Object.entries(dayTasks).forEach(([d, t]) => {
+                  if (dayStatus[d] === 'done' && t?.tag && counts[t.tag] !== undefined) counts[t.tag]++;
+                });
+                const maxCount = Math.max(1, ...Object.values(counts));
+
+                return (
+                  <div style={{ marginBottom: 24 }}>
+                    <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", color: T.muted, margin: "0 0 12px" }}>Where you've been building</p>
+                    <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
+                      {TAGS.map(tag => {
+                        const n = counts[tag];
+                        const pct = n / maxCount; // 0–1
+                        const hasData = n > 0;
+                        const color = TAG_COLORS[tag];
+                        const BUCKET_H = 64; // compact height
+                        const fillH = Math.max(hasData ? 8 : 0, Math.round(pct * BUCKET_H));
+                        return (
+                          <div key={tag} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 5 }}>
+                            {/* Count above bucket */}
+                            <span style={{
+                              fontFamily: T.sans, fontSize: 12, fontWeight: 600,
+                              color: hasData ? color : T.border,
+                              minHeight: 16, display: "block",
+                              opacity: hasData ? 0.85 : 1,
+                            }}>{n > 0 ? n : ""}</span>
+
+                            {/* Bucket shell */}
+                            <div style={{
+                              width: "100%",
+                              height: BUCKET_H,
+                              borderRadius: "4px 4px 6px 6px",
+                              border: `1px solid ${hasData ? color + "33" : T.border}`,
+                              background: T.cream,
+                              position: "relative",
+                              overflow: "hidden",
+                            }}>
+                              {/* Liquid fill */}
+                              {hasData && (
+                                <div style={{
+                                  position: "absolute",
+                                  bottom: 0, left: 0, right: 0,
+                                  height: fillH,
+                                  background: `linear-gradient(180deg, ${color}40 0%, ${color}88 100%)`,
+                                  borderRadius: "2px 2px 5px 5px",
+                                  transition: "height 0.6s cubic-bezier(0.34,1.56,0.64,1)",
+                                }}>
+                                  {/* Shine band */}
+                                  <div style={{
+                                    position: "absolute", top: 0, left: "12%", right: "12%",
+                                    height: 2, background: "rgba(255,255,255,0.4)",
+                                    borderRadius: 1,
+                                  }} />
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Tag label */}
+                            <span style={{
+                              fontFamily: T.sans, fontSize: 11, fontWeight: 600,
+                              color: hasData ? color : T.muted,
+                              textTransform: "uppercase", letterSpacing: 0.7,
+                              textAlign: "center", opacity: hasData ? 0.8 : 0.45,
+                            }}>{TAG_LABELS[tag]}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
                 );
               })()}
@@ -6238,43 +6877,17 @@ function DashboardScreen({ plan, onBack, startDate }) {
                     return (
                       <div key={wk} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
                         <div style={{ width: "100%", height: 48, background: T.cream, borderRadius: 6, overflow: "hidden", display: "flex", alignItems: "flex-end", border: isCurr ? `1.5px solid ${T.purpleMid}` : "1px solid transparent" }}>
-                          <div style={{ width: "100%", height: `${Math.max(pct * 100, isFut ? 0 : 4)}%`, background: isCurr ? T.purple : isFut ? "transparent" : (done >= 5 ? "#0F6E56" : done >= 3 ? T.purple : T.purpleMid), borderRadius: "4px 4px 0 0", transition: "height 0.4s ease", opacity: isFut ? 0.2 : 1 }} />
+                          <div style={{ width: "100%", height: `${Math.max(pct * 100, isFut ? 0 : 4)}%`, background: isCurr ? T.purple : isFut ? "transparent" : (done >= 5 ? T.purpleD : done >= 3 ? T.purple : T.purpleMid), borderRadius: "4px 4px 0 0", transition: "height 0.4s ease", opacity: isFut ? 0.2 : 1 }} />
                         </div>
                         <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
                           <span style={{ fontFamily: T.sans, fontSize: 10, color: isCurr ? T.purple : T.muted, fontWeight: isCurr ? 700 : 400 }}>W{wk}</span>
-                          {weeklyCheckInDone[wk] && <span style={{ fontSize: 8, color: "#0F6E56" }}>✓</span>}
+                          {weeklyCheckInDone[wk] && <span style={{ fontSize: 8, color: T.purple }}>✓</span>}
                         </div>
                       </div>
                     );
                   })}
                 </div>
               </div>
-
-              {/* ── TASK TYPE BREAKDOWN ── */}
-              {(() => {
-                const counts = { Apply: 0, Read: 0, Reflect: 0, Tool: 0 };
-                Object.entries(dayTasks).forEach(([d, t]) => { if (dayStatus[d] === 'done' && t?.tag) counts[t.tag] = (counts[t.tag] || 0) + 1; });
-                const total = Object.values(counts).reduce((a, b) => a + b, 0);
-                if (total === 0) return null;
-                const tagColors2 = { Apply: T.purpleD, Read: "#185FA5", Reflect: "#92400E", Tool: "#0F6E56" };
-                const tagBgs = { Apply: T.purpleL, Read: "#E6F1FB", Reflect: "#FEF3C7", Tool: "#E1F5EE" };
-                return (
-                  <div style={{ marginBottom: 24 }}>
-                    <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", color: T.muted, margin: "0 0 12px" }}>How you've been working</p>
-                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                      {Object.entries(counts).filter(([,n])=>n>0).sort((a,b)=>b[1]-a[1]).map(([tag, n]) => (
-                        <div key={tag} style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 14px", background: tagBgs[tag] || T.purpleL, borderRadius: 10, flex: 1, minWidth: 100 }}>
-                          <div style={{ flex: 1 }}>
-                            <p style={{ fontFamily: T.sans, fontSize: 20, fontWeight: 700, color: tagColors2[tag] || T.purpleD, margin: 0 }}>{n}</p>
-                            <p style={{ fontFamily: T.sans, fontSize: 12, color: tagColors2[tag] || T.purpleD, margin: 0, opacity: 0.7 }}>{tag}</p>
-                          </div>
-                          <p style={{ fontFamily: T.sans, fontSize: 13, color: tagColors2[tag] || T.purpleD, margin: 0, opacity: 0.5 }}>{Math.round(n/total*100)}%</p>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                );
-              })()}
 
               {/* ── ACHIEVEMENTS ── */}
               {(() => {
@@ -6297,7 +6910,7 @@ function DashboardScreen({ plan, onBack, startDate }) {
                             <span style={{ fontSize: 22, flexShrink: 0, filter: isEarned ? "none" : "grayscale(1)" }}>{a.icon}</span>
                             <div style={{ flex: 1, minWidth: 0 }}>
                               <p style={{ fontFamily: T.sans, fontSize: 13, fontWeight: 700, color: isEarned ? T.purpleD : T.muted, margin: "0 0 1px" }}>{a.name}</p>
-                              <p style={{ fontFamily: T.sans, fontSize: 11, color: isEarned ? T.body : T.muted, margin: 0, lineHeight: 1.4 }}>{a.desc}</p>
+                              <p style={{ fontFamily: T.sans, fontSize: 12, color: isEarned ? T.body : T.muted, margin: 0, lineHeight: 1.4 }}>{a.desc}</p>
                             </div>
                           </div>
                         );
@@ -6313,8 +6926,8 @@ function DashboardScreen({ plan, onBack, startDate }) {
                   .filter(d => dayStatus[d] === 'done' && dayTasks[d])
                   .slice(-8).reverse();
                 if (completedDays.length === 0) return null;
-                const tagColors2 = { Apply: T.purpleD, Read: "#185FA5", Reflect: "#92400E", Tool: "#0F6E56" };
-                const tagBgs2 = { Apply: T.purpleL, Read: "#E6F1FB", Reflect: "#FEF3C7", Tool: "#E1F5EE" };
+                const tagColors2 = { Apply: "#3A6B50", Read: "#3B55A0", Reflect: "#7A3D2E", Tool: "#1A6B62" };
+                const tagBgs2 = { Apply: "#F0F7F2", Read: "#EEF2FB", Reflect: "#F5EFEB", Tool: "#EDF7F6" };
                 return (
                   <div>
                     <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", color: T.muted, margin: "0 0 12px" }}>What you've built</p>
@@ -6352,21 +6965,15 @@ function DashboardScreen({ plan, onBack, startDate }) {
           setShowGoalEdit(false);
           setGoalUpdating(true);
           setGoalStatement("");
-          // Update answers
-          plan._answers.goal = newGoalIdx ?? currentGoal;
-          plan._answers.goal_detail = undefined;
-          plan._answers.goal_custom = customText || undefined;
+          // Immutable update
+          let updatedPlan = { ...plan, _answers: { ...plan._answers, goal: newGoalIdx ?? currentGoal, goal_detail: undefined, goal_custom: customText || undefined } };
+          setPlanState(updatedPlan);
           setGoalUpdatedDay(highestUnlocked);
           // 1. Regenerate week arc themes
-          const newArc = await generateWeekArc(plan._answers, plan.classification || {});
+          const newArc = await generateWeekArc(updatedPlan._answers, updatedPlan.classification || {});
           if (newArc) {
-            plan.weekArc = newArc;
-            // Update weekThemes56 via a state-like approach — rebuild from new arc
-            const updatedThemes = [
-              newArc.w1, newArc.w2, newArc.w3, newArc.w4,
-              newArc.w5, newArc.w6, newArc.w7, newArc.w8,
-            ];
-            // Force re-render by updating a dummy key (weekGoalOverride resets to null to use fresh arc)
+            updatedPlan = { ...updatedPlan, weekArc: newArc };
+            setPlanState(updatedPlan);
             setWeekGoalOverride(null);
           }
           // 2. Regenerate remaining days in current week
@@ -6376,13 +6983,13 @@ function DashboardScreen({ plan, onBack, startDate }) {
           if (remainingDays.length > 0) {
             const newTasks = {};
             for (const d of remainingDays) {
-              const t = await generateNextDayTask(plan, d - 1, dayStatus[d-1] || 'done', dayNotes[d-1] || "", noraInsight, dayTasks, dayStatus, dayNotes);
+              const t = await generateNextDayTask(updatedPlan, d - 1, dayStatus[d-1] || 'done', dayNotes[d-1] || "", noraInsight, dayTasks, dayStatus, dayNotes);
               if (t) newTasks[d] = t;
             }
             setDayTasks(prev => ({ ...prev, ...newTasks }));
           }
           setGoalUpdating(false);
-          generateGoalStatement(plan, dayTasks, dayStatus, dayNotes).then(s => { if (s) setGoalStatement(s); });
+          generateGoalStatement(updatedPlan, dayTasks, dayStatus, dayNotes).then(s => { if (s) setGoalStatement(s); });
         };
 
         return (
@@ -6454,30 +7061,491 @@ function DashboardScreen({ plan, onBack, startDate }) {
       {weekGenerating && !weeklyCheckInOpen && !isInitialWeekLoad && (
         <div style={{ position: "fixed", bottom: 24, left: "50%", transform: "translateX(-50%)", background: T.purple, color: "#fff", fontFamily: T.sans, fontSize: 14, padding: "12px 20px", borderRadius: 10, zIndex: 99, boxShadow: "0 4px 20px rgba(0,0,0,0.2)", display: "flex", alignItems: "center", gap: 10 }}>
           <div style={{ width: 14, height: 14, borderRadius: "50%", border: "2px solid rgba(255,255,255,0.3)", borderTop: "2px solid #fff", animation: "spin 0.8s linear infinite", flexShrink: 0 }} />
-          Building your next week...
+          Building your upcoming days...
         </div>
       )}
-      {/* ── ACHIEVEMENT TOASTS ── */}
-      {achievementToasts.length > 0 && (
-        <div style={{ position: "fixed", bottom: 88, left: "50%", transform: "translateX(-50%)", zIndex: 200, display: "flex", flexDirection: "column", gap: 10, alignItems: "center", pointerEvents: "none", width: "min(380px, 90vw)" }}>
-          {achievementToasts.map(a => (
-            <div key={a._key} style={{
-              background: T.black, borderRadius: 14, padding: "14px 18px",
-              display: "flex", alignItems: "center", gap: 14, width: "100%",
-              boxShadow: "0 8px 32px rgba(0,0,0,0.22)",
-              animation: "fadeIn 0.35s ease",
-              pointerEvents: "auto",
+      {/* ── ACHIEVEMENT CINEMATIC OVERLAY ── */}
+      {achievementToasts.length > 0 && (() => {
+        const a = achievementToasts[0]; // show one at a time
+        return (
+          <div style={{
+            position: "fixed", inset: 0, zIndex: 300,
+            background: "rgba(8,6,20,0.82)",
+            backdropFilter: "blur(12px)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            padding: "24px 16px",
+            animation: "achievementBgIn 0.4s cubic-bezier(0.22,1,0.36,1)",
+          }} onClick={() => setAchievementToasts(prev => prev.slice(1))}>
+            <style>{`
+              @keyframes achievementBgIn { from { opacity: 0; } to { opacity: 1; } }
+              @keyframes achievementCardIn {
+                0%   { opacity: 0; transform: scale(0.55) translateY(40px); }
+                60%  { opacity: 1; transform: scale(1.06) translateY(-6px); }
+                80%  { transform: scale(0.97) translateY(2px); }
+                100% { opacity: 1; transform: scale(1) translateY(0); }
+              }
+              @keyframes achievementIconBounce {
+                0%   { transform: scale(0.2) rotate(-20deg); opacity: 0; }
+                50%  { transform: scale(1.3) rotate(8deg); opacity: 1; }
+                70%  { transform: scale(0.9) rotate(-3deg); }
+                100% { transform: scale(1) rotate(0deg); opacity: 1; }
+              }
+              @keyframes achievementGlow {
+                0%, 100% { box-shadow: 0 0 40px 8px rgba(155,143,224,0.35), 0 0 0 0 rgba(155,143,224,0.15); }
+                50%       { box-shadow: 0 0 80px 24px rgba(155,143,224,0.55), 0 0 0 40px rgba(155,143,224,0); }
+              }
+              @keyframes achievementShine {
+                0%   { left: -100%; }
+                100% { left: 200%; }
+              }
+              @keyframes particleFloat {
+                0%   { transform: translateY(0) scale(1); opacity: 1; }
+                100% { transform: translateY(-120px) scale(0.3); opacity: 0; }
+              }
+              @keyframes starSpin {
+                0%   { transform: rotate(0deg) scale(0); opacity: 0; }
+                40%  { opacity: 1; transform: rotate(180deg) scale(1.2); }
+                100% { transform: rotate(360deg) scale(0.8); opacity: 0; }
+              }
+              @keyframes achievementTapHint {
+                0%, 100% { opacity: 0.4; } 50% { opacity: 0.7; }
+              }
+            `}</style>
+
+            {/* Particle burst */}
+            {["⭐","✨","🎉","💫","⚡","🌟","✦","⬟"].map((p, i) => (
+              <div key={i} style={{
+                position: "absolute",
+                left: `${20 + i * 9}%`,
+                top: `${30 + (i % 3) * 15}%`,
+                fontSize: i % 2 === 0 ? 22 : 16,
+                animation: `particleFloat ${0.9 + i * 0.15}s ease-out ${i * 0.07}s both`,
+                pointerEvents: "none",
+              }}>{p}</div>
+            ))}
+            {["★","◆","●","▲"].map((p, i) => (
+              <div key={`s${i}`} style={{
+                position: "absolute",
+                right: `${10 + i * 11}%`,
+                top: `${25 + (i % 4) * 12}%`,
+                fontSize: 18,
+                color: ["#B8AFEC","#5DCAA5","#FBBF24","#F472B6"][i],
+                animation: `starSpin ${0.8 + i * 0.2}s ease-out ${i * 0.1 + 0.15}s both`,
+                pointerEvents: "none",
+              }}>{p}</div>
+            ))}
+
+            {/* Main card */}
+            <div style={{
+              width: "100%", maxWidth: 440,
+              background: "linear-gradient(155deg, #1a1630 0%, #231e3d 55%, #120d26 100%)",
+              borderRadius: 28,
+              border: "1.5px solid rgba(155,143,224,0.35)",
+              padding: "48px 36px 40px",
+              textAlign: "center",
+              position: "relative",
+              overflow: "hidden",
+              animation: "achievementCardIn 0.65s cubic-bezier(0.22,1,0.36,1) both, achievementGlow 2.5s ease-in-out 0.5s infinite",
             }}>
-              <span style={{ fontSize: 28, flexShrink: 0 }}>{a.icon}</span>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: 1.2, textTransform: "uppercase", color: T.purple, margin: "0 0 2px" }}>Achievement unlocked</p>
-                <p style={{ fontFamily: T.sans, fontSize: 15, fontWeight: 700, color: "#fff", margin: "0 0 1px" }}>{a.name}</p>
-                <p style={{ fontFamily: T.sans, fontSize: 12, color: "rgba(255,255,255,0.5)", margin: 0 }}>{a.desc}</p>
+              {/* Shine sweep */}
+              <div style={{
+                position: "absolute", top: 0, bottom: 0, width: "40%",
+                background: "linear-gradient(90deg, transparent, rgba(255,255,255,0.06), transparent)",
+                animation: "achievementShine 1.8s ease 0.5s 2",
+                pointerEvents: "none",
+              }} />
+
+              {/* Ambient glow disc */}
+              <div style={{
+                position: "absolute", top: "-40%", left: "50%", transform: "translateX(-50%)",
+                width: 360, height: 280, borderRadius: "50%",
+                background: "radial-gradient(ellipse, rgba(155,143,224,0.22) 0%, transparent 70%)",
+                pointerEvents: "none",
+              }} />
+
+              {/* Icon */}
+              <div style={{
+                fontSize: 96, lineHeight: 1,
+                marginBottom: 28,
+                display: "inline-block",
+                animation: "achievementIconBounce 0.7s cubic-bezier(0.22,1,0.36,1) 0.2s both",
+                filter: "drop-shadow(0 4px 32px rgba(155,143,224,0.5))",
+                position: "relative", zIndex: 1,
+              }}>{a.icon}</div>
+
+              {/* Label */}
+              <p style={{
+                fontFamily: T.sans, fontSize: 11, fontWeight: 700,
+                letterSpacing: "0.18em", textTransform: "uppercase",
+                color: "rgba(155,143,224,0.75)", margin: "0 0 10px",
+                position: "relative", zIndex: 1,
+              }}>Achievement Unlocked</p>
+
+              {/* Title */}
+              <h2 style={{
+                fontFamily: T.serif, fontSize: 36, fontWeight: 400,
+                color: "#fff", margin: "0 0 14px", lineHeight: 1.15,
+                letterSpacing: "-0.5px",
+                position: "relative", zIndex: 1,
+              }}>{a.name}</h2>
+
+              {/* Desc */}
+              <p style={{
+                fontFamily: T.sans, fontSize: 16, fontWeight: 300,
+                color: "rgba(255,255,255,0.55)", lineHeight: 1.65,
+                margin: "0 0 32px",
+                position: "relative", zIndex: 1,
+              }}>{a.desc}</p>
+
+              {/* Divider line */}
+              <div style={{ height: 1, background: "rgba(255,255,255,0.08)", margin: "0 0 20px", position: "relative", zIndex: 1 }} />
+
+              {/* Tap to continue */}
+              <p style={{
+                fontFamily: T.sans, fontSize: 13, color: "rgba(255,255,255,0.35)",
+                margin: 0, letterSpacing: "0.05em",
+                animation: "achievementTapHint 1.8s ease-in-out infinite",
+                position: "relative", zIndex: 1,
+              }}>Tap anywhere to continue</p>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ── DAY COMPLETION CELEBRATION MODAL ── */}
+      {celebrationModal && (() => {
+        const { dayNum: cm_dayNum, earned, streakCount: cm_streak, crossedMilestone } = celebrationModal;
+        const nextDay = cm_dayNum + 1;
+        const hasNext = nextDay <= 56;
+        const quote = dailyQuotes[cm_dayNum];
+        const closeCelebration = () => {
+          setCelebrationModal(null);
+          if (crossedMilestone) {
+            setTimeout(() => setCredsMilestoneModal({
+              tier: crossedMilestone.tier,
+              copy: crossedMilestone.copy,
+              total: cashPot,
+            }), 120);
+          }
+        };
+        return (
+          <div style={{
+            position: "fixed", inset: 0, zIndex: 300,
+            background: "linear-gradient(155deg, #0e0c1f 0%, #1e1a35 55%, #0a0818 100%)",
+            display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+            padding: "24px 20px",
+            overflow: "hidden",
+          }}>
+            <style>{`
+              @keyframes celebIn { from { opacity:0; transform: scale(0.88) translateY(20px); } to { opacity:1; transform: scale(1) translateY(0); } }
+              @keyframes confettiFall {
+                0%   { transform: translateY(-20px) rotate(0deg); opacity: 1; }
+                100% { transform: translateY(110vh) rotate(720deg); opacity: 0; }
+              }
+              @keyframes starPop {
+                0%   { transform: scale(0) rotate(-30deg); opacity: 0; }
+                60%  { transform: scale(1.3) rotate(10deg); opacity: 1; }
+                100% { transform: scale(1) rotate(0deg); opacity: 1; }
+              }
+            `}</style>
+
+            {/* Confetti */}
+            {Array.from({ length: 18 }, (_, i) => (
+              <div key={i} style={{
+                position: "absolute",
+                left: `${5 + (i * 5.5) % 90}%`,
+                top: `${-5 - (i * 7) % 20}%`,
+                width: i % 3 === 0 ? 10 : i % 3 === 1 ? 7 : 12,
+                height: i % 3 === 0 ? 10 : i % 3 === 1 ? 7 : 4,
+                borderRadius: i % 3 === 2 ? 2 : "50%",
+                background: ["#f0b429","#B8AFEC","#5DCAA5","#F472B6","#60A5FA","#FBBF24"][i % 6],
+                animation: `confettiFall ${2.2 + (i * 0.18) % 1.8}s ease-in ${(i * 0.11) % 1.4}s both`,
+                pointerEvents: "none",
+              }} />
+            ))}
+
+            {/* Card */}
+            <div style={{
+              width: "100%", maxWidth: 400, textAlign: "center",
+              animation: "celebIn 0.5s cubic-bezier(0.22,1,0.36,1)",
+            }}>
+              {/* Checkmark circle */}
+              <div style={{ display: "flex", justifyContent: "center", marginBottom: 18 }}>
+                <div style={{
+                  width: 64, height: 64, borderRadius: "50%",
+                  background: "rgba(155,143,224,0.18)",
+                  border: "2px solid rgba(155,143,224,0.4)",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  animation: "starPop 0.5s cubic-bezier(0.22,1,0.36,1) 0.1s both",
+                }}>
+                  <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+                    <path d="M6 14l6 6 10-12" stroke="#B8AFEC" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                </div>
+              </div>
+
+              {/* Day done headline */}
+              <p style={{ fontFamily: T.sans, fontSize: 12, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", color: "rgba(155,143,224,0.6)", margin: "0 0 8px" }}>
+                Day {cm_dayNum} complete
+              </p>
+              <h2 style={{ fontFamily: T.serif, fontSize: 36, fontWeight: 400, color: "#fff", margin: "0 0 6px", letterSpacing: "-0.5px", lineHeight: 1.1 }}>
+                You did it.
+              </h2>
+
+              {/* Only show streak at meaningful milestones: 3, 7, 14, 21, 30 */}
+              {[3, 7, 14, 21, 30].includes(cm_streak) ? (
+                <p style={{ fontFamily: T.sans, fontSize: 15, color: "rgba(255,255,255,0.55)", margin: "0 0 20px" }}>
+                  🔥 {cm_streak}-day streak
+                </p>
+              ) : <div style={{ height: 20 }} />}
+
+              {/* Creds earned */}
+              <div style={{ display: "inline-flex", alignItems: "center", gap: 10, background: "rgba(240,180,41,0.12)", border: "1px solid rgba(240,180,41,0.3)", borderRadius: 12, padding: "10px 20px", marginBottom: 28 }}>
+                <svg width="20" height="14" viewBox="0 0 48 32" fill="none">
+                  <ellipse cx="24" cy="27" rx="13" ry="4.5" fill="#92640a" stroke="#c8860e" strokeWidth="1"/>
+                  <rect x="11" y="20" width="26" height="7" fill="#92640a"/>
+                  <ellipse cx="24" cy="20" rx="13" ry="4.5" fill="#d4900f" stroke="#f0b429" strokeWidth="1"/>
+                  <ellipse cx="24" cy="18" rx="13" ry="4.5" fill="#7a5208" stroke="#c8860e" strokeWidth="1"/>
+                  <rect x="11" y="11" width="26" height="7" fill="#7a5208"/>
+                  <ellipse cx="24" cy="11" rx="13" ry="4.5" fill="#f0b429" stroke="#fad568" strokeWidth="1.5"/>
+                  <ellipse cx="20" cy="10.2" rx="5" ry="1.5" fill="rgba(255,255,255,0.25)" transform="rotate(-10 20 10.2)"/>
+                </svg>
+                <span style={{ fontFamily: T.sans, fontSize: 16, fontWeight: 800, color: "#fad568" }}>+{earned} Creds</span>
+              </div>
+
+              {/* Quote — bigger, more readable */}
+              <div style={{ margin: "0 0 32px", padding: "0 4px" }}>
+                {quote ? (
+                  <>
+                    <p style={{ fontFamily: T.serif, fontSize: 19, color: "rgba(255,255,255,0.78)", margin: "0 0 10px", lineHeight: 1.6, fontStyle: "italic" }}>
+                      {quote.text}
+                    </p>
+
+                  </>
+                ) : null}
+              </div>
+
+              {/* CTA */}
+              {hasNext ? (
+                <button onClick={() => {
+                  closeCelebration();
+                  if (!crossedMilestone) setTimeout(() => setActiveDay(nextDay), 60);
+                  else setTimeout(() => setActiveDay(nextDay), 700);
+                }}
+                  style={{ width: "100%", background: "#fff", color: T.black, border: "none", borderRadius: 12, padding: "16px 0", fontFamily: T.sans, fontSize: 17, fontWeight: 700, cursor: "pointer", letterSpacing: -0.3, marginBottom: 12 }}>
+                  {dayTasks[nextDay] ? `Start Day ${nextDay} →` : "Continue →"}
+                </button>
+              ) : (
+                <button onClick={closeCelebration}
+                  style={{ width: "100%", background: "#fff", color: T.black, border: "none", borderRadius: 12, padding: "16px 0", fontFamily: T.sans, fontSize: 17, fontWeight: 700, cursor: "pointer", letterSpacing: -0.3, marginBottom: 12 }}>
+                  Keep going →
+                </button>
+              )}
+              <button onClick={closeCelebration}
+                style={{ background: "none", border: "none", fontFamily: T.sans, fontSize: 13, color: "rgba(255,255,255,0.28)", cursor: "pointer", padding: "4px 0" }}>
+                Back to dashboard
+              </button>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ── CREDS MILESTONE MODAL ── */}
+      {credsMilestoneModal && (() => {
+        const { tier, copy, total } = credsMilestoneModal;
+        // Tier accent colours
+        const tierAccent = { Operative: "#5DCAA5", Strategist: "#B8AFEC", Senior: "#f0b429", Principal: "#F472B6" };
+        const accent = tierAccent[tier] || "#B8AFEC";
+        return (
+          <div style={{
+            position: "fixed", inset: 0, zIndex: 310,
+            background: "linear-gradient(155deg, #0a0818 0%, #160f28 55%, #0e0c1f 100%)",
+            display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+            padding: "24px 20px", overflow: "hidden",
+          }}>
+            <style>{`
+              @keyframes milestoneIn { from { opacity:0; transform: scale(0.82) translateY(28px); } to { opacity:1; transform: scale(1) translateY(0); } }
+              @keyframes tierGlow { 0%,100% { text-shadow: 0 0 24px ${accent}55; } 50% { text-shadow: 0 0 48px ${accent}99, 0 0 80px ${accent}44; } }
+              @keyframes ringExpand { from { transform: scale(0.5); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+            `}</style>
+
+            {/* Ambient glow rings */}
+            <div style={{ position: "absolute", width: 320, height: 320, borderRadius: "50%", border: `1px solid ${accent}22`, top: "50%", left: "50%", transform: "translate(-50%,-50%)", animation: "ringExpand 0.7s ease 0.1s both", pointerEvents: "none" }} />
+            <div style={{ position: "absolute", width: 220, height: 220, borderRadius: "50%", border: `1px solid ${accent}33`, top: "50%", left: "50%", transform: "translate(-50%,-50%)", animation: "ringExpand 0.6s ease 0.05s both", pointerEvents: "none" }} />
+
+            <div style={{ width: "100%", maxWidth: 380, textAlign: "center", animation: "milestoneIn 0.55s cubic-bezier(0.22,1,0.36,1)" }}>
+
+              {/* Badge ring */}
+              <div style={{ display: "flex", justifyContent: "center", marginBottom: 28 }}>
+                <div style={{
+                  width: 80, height: 80, borderRadius: "50%",
+                  background: `radial-gradient(circle at 38% 36%, ${accent}33 0%, ${accent}11 100%)`,
+                  border: `2px solid ${accent}66`,
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  boxShadow: `0 0 32px ${accent}44`,
+                }}>
+                  <svg width="34" height="34" viewBox="0 0 34 34" fill="none">
+                    <circle cx="17" cy="17" r="13" stroke={accent} strokeWidth="1.5" strokeOpacity="0.5" />
+                    <path d="M11 17l4.5 4.5L23 12" stroke={accent} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                </div>
+              </div>
+
+              {/* Eyebrow */}
+              <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: "0.14em", textTransform: "uppercase", color: `${accent}bb`, margin: "0 0 10px" }}>
+                Creds milestone
+              </p>
+
+              {/* Tier name */}
+              <h2 style={{
+                fontFamily: T.serif, fontSize: 52, fontWeight: 400, color: accent,
+                margin: "0 0 6px", letterSpacing: "-1px", lineHeight: 1,
+                animation: "tierGlow 2.5s ease-in-out infinite",
+              }}>
+                {tier}
+              </h2>
+
+              {/* Total */}
+              <p style={{ fontFamily: T.sans, fontSize: 14, color: "rgba(255,255,255,0.38)", margin: "0 0 22px", letterSpacing: 0.3 }}>
+                {total} Creds earned
+              </p>
+
+              {/* Copy */}
+              <p style={{ fontFamily: T.serif, fontSize: 18, color: "rgba(255,255,255,0.72)", margin: "0 0 40px", lineHeight: 1.65, fontStyle: "italic", padding: "0 8px" }}>
+                {copy}
+              </p>
+
+              {/* CTA */}
+              <button
+                onClick={() => setCredsMilestoneModal(null)}
+                style={{ width: "100%", background: accent, color: "#0a0818", border: "none", borderRadius: 12, padding: "16px 0", fontFamily: T.sans, fontSize: 17, fontWeight: 800, cursor: "pointer", letterSpacing: -0.3 }}>
+                Keep going
+              </button>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ── MOVES LOG MODAL ── */}
+      {showCredsLog && (() => {
+        // Derive earnings log from completed days
+        const tagCreds = { Apply: 6, Read: 4, Reflect: 5, Tool: 8 };
+        const log = [];
+        let runningStreak = 0;
+        for (let d = 1; d <= 56; d++) {
+          if (dayStatus[d] === 'done') {
+            runningStreak++;
+            const tag = dayTasks[d]?.tag || "Apply";
+            const base = tagCreds[tag] ?? 5;
+            const bonus = runningStreak >= 14 ? 4 : runningStreak >= 7 ? 2 : runningStreak >= 3 ? 1 : 0;
+            const total = base + bonus;
+            log.push({ day: d, tag, base, bonus, total, title: dayTasks[d]?.title });
+          } else if (dayStatus[d] === 'skipped') {
+            // streak allows 1 skip
+          } else {
+            break;
+          }
+        }
+
+        const tagColors5 = { Apply: "#3A6B50", Read: "#3B55A0", Reflect: "#7A3D2E", Tool: "#1A6B62" };
+        const tagBgs5   = { Apply: "#F0F7F2",  Read: "#EEF2FB",  Reflect: "#F5EFEB", Tool: "#EDF7F6" };
+
+        // Creds breakdown by type
+        const byType = log.reduce((acc, e) => { acc[e.tag] = (acc[e.tag]||0) + e.total; return acc; }, {});
+        const nextMilestone = [50,100,150,200,300,500].find(m => m > cashPot) || null;
+
+        return (
+          <div style={{ position: "fixed", inset: 0, background: "rgba(8,6,20,0.8)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center", padding: "24px 16px", backdropFilter: "blur(8px)", animation: "fadeIn 0.25s ease" }}
+            onClick={e => { if (e.target === e.currentTarget) setShowCredsLog(false); }}>
+            <div style={{ width: "100%", maxWidth: 560, background: "linear-gradient(175deg, #1a1630 0%, #231e3d 100%)", borderRadius: 20, border: "1px solid rgba(155,143,224,0.2)", maxHeight: "85vh", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+
+              {/* Header */}
+              <div style={{ padding: "22px 24px 16px", borderBottom: "1px solid rgba(255,255,255,0.07)", display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+                  <svg width="40" height="30" viewBox="0 0 48 32" fill="none">
+                    <ellipse cx="24" cy="27" rx="13" ry="4.5" fill="#92640a" stroke="#c8860e" strokeWidth="1"/>
+                    <rect x="11" y="20" width="26" height="7" fill="#92640a"/>
+                    <ellipse cx="24" cy="20" rx="13" ry="4.5" fill="#d4900f" stroke="#f0b429" strokeWidth="1"/>
+                    <ellipse cx="24" cy="18" rx="13" ry="4.5" fill="#7a5208" stroke="#c8860e" strokeWidth="1"/>
+                    <rect x="11" y="11" width="26" height="7" fill="#7a5208"/>
+                    <ellipse cx="24" cy="11" rx="13" ry="4.5" fill="#c8860e" stroke="#f0c048" strokeWidth="1"/>
+                    <ellipse cx="24" cy="9" rx="13" ry="4.5" fill="#5c3c06" stroke="#c8860e" strokeWidth="1"/>
+                    <rect x="11" y="2" width="26" height="7" fill="#5c3c06"/>
+                    <ellipse cx="24" cy="2" rx="13" ry="4.5" fill="#f0b429" stroke="#fad568" strokeWidth="1.5"/>
+                    <ellipse cx="20" cy="1.2" rx="5" ry="1.5" fill="rgba(255,255,255,0.22)" transform="rotate(-10 20 1.2)"/>
+                  </svg>
+                  <div>
+                    <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", color: "rgba(155,143,224,0.65)", margin: 0 }}>Your Creds</p>
+                    <p style={{ fontFamily: T.serif, fontSize: 28, fontWeight: 400, color: "#B8AFEC", margin: 0, lineHeight: 1.1 }}>{cashPot} <span style={{ fontSize: 16, fontWeight: 300, opacity: 0.55 }}>Cr</span></p>
+                  </div>
+                </div>
+                <button onClick={() => setShowCredsLog(false)} style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "50%", width: 30, height: 30, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, color: "rgba(255,255,255,0.45)", cursor: "pointer" }}>✕</button>
+              </div>
+
+              <div style={{ flex: 1, overflowY: "auto", padding: "18px 24px 32px" }}>
+
+                {/* Next milestone */}
+                {nextMilestone && (
+                  <div style={{ marginBottom: 20, padding: "12px 16px", background: "rgba(155,143,224,0.1)", borderRadius: 12, border: "1px solid rgba(155,143,224,0.18)" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 7 }}>
+                      <p style={{ fontFamily: T.sans, fontSize: 12, color: "rgba(255,255,255,0.5)", margin: 0 }}>Next milestone</p>
+                      <p style={{ fontFamily: T.sans, fontSize: 12, fontWeight: 700, color: "#B8AFEC", margin: 0 }}>{cashPot} / {nextMilestone} Cr</p>
+                    </div>
+                    <div style={{ height: 5, borderRadius: 3, background: "rgba(255,255,255,0.08)", overflow: "hidden" }}>
+                      <div style={{ height: "100%", width: `${Math.min(100, (cashPot / nextMilestone) * 100)}%`, background: "linear-gradient(90deg, #7B6FCC, #B0A8F0)", borderRadius: 3, transition: "width 0.5s ease" }} />
+                    </div>
+                    <p style={{ fontFamily: T.sans, fontSize: 11, color: "rgba(255,255,255,0.3)", margin: "6px 0 0" }}>{nextMilestone - cashPot} Cr to go</p>
+                  </div>
+                )}
+
+                {/* Breakdown by task type */}
+                {Object.keys(byType).length > 0 && (
+                  <div style={{ marginBottom: 20 }}>
+                    <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "rgba(255,255,255,0.28)", margin: "0 0 10px" }}>How you earned them</p>
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                      {Object.entries(byType).sort((a,b)=>b[1]-a[1]).map(([tag, total]) => (
+                        <div key={tag} style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 12px", background: "rgba(255,255,255,0.05)", borderRadius: 8, border: "1px solid rgba(255,255,255,0.07)" }}>
+                          <span style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, padding: "2px 7px", background: tagBgs5[tag], color: tagColors5[tag], borderRadius: 3 }}>{tag}</span>
+                          <span style={{ fontFamily: T.sans, fontSize: 13, fontWeight: 700, color: "#B8AFEC" }}>{total} Cr</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Per-day log */}
+                <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "rgba(255,255,255,0.28)", margin: "0 0 10px" }}>
+                  {log.length > 0 ? "Recent earnings" : "No Acts yet — complete your first day to start earning."}
+                </p>
+                <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+                  {log.slice().reverse().slice(0, 14).map(entry => (
+                    <div key={entry.day} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", background: "rgba(255,255,255,0.04)", borderRadius: 10, border: "1px solid rgba(255,255,255,0.06)" }}>
+                      <div style={{ width: 32, height: 32, borderRadius: 8, background: "rgba(155,143,224,0.12)", border: "1px solid rgba(155,143,224,0.2)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                        <span style={{ fontFamily: T.sans, fontSize: 10, fontWeight: 700, color: "#B8AFEC" }}>{entry.day}</span>
+                      </div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <p style={{ fontFamily: T.sans, fontSize: 13, color: "rgba(255,255,255,0.75)", margin: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {entry.title || `Day ${entry.day} completed`}
+                        </p>
+                        {entry.bonus > 0 && (
+                          <p style={{ fontFamily: T.sans, fontSize: 11, color: "rgba(155,143,224,0.6)", margin: "2px 0 0" }}>+{entry.bonus} streak bonus</p>
+                        )}
+                      </div>
+                      <p style={{ fontFamily: T.sans, fontSize: 14, fontWeight: 800, color: "#B8AFEC", margin: 0, flexShrink: 0 }}>+{entry.total}</p>
+                    </div>
+                  ))}
+                </div>
+
+                {log.length === 0 && (
+                  <p style={{ fontFamily: T.sans, fontSize: 14, color: "rgba(255,255,255,0.3)", margin: "8px 0 0", lineHeight: 1.6 }}>
+                    Creds accumulate as you complete days. Tool tasks earn the most (8 Creds). Streak bonuses kick in from day 3.
+                  </p>
+                )}
               </div>
             </div>
-          ))}
-        </div>
-      )}
+          </div>
+        );
+      })()}
 
       {/* ── NORA MODAL ── */}
       {noraOpen && (
@@ -6557,8 +7625,7 @@ Return ONLY valid JSON: {"score": N, "reason": "one short sentence"}`;
             }
 
             if (cmds.changeGoalCustom) {
-              plan._answers.goal_custom = cmds.changeGoalCustom;
-              plan._answers.goal_detail = undefined;
+              setPlanState(prev => ({ ...prev, _answers: { ...prev._answers, goal_custom: cmds.changeGoalCustom, goal_detail: undefined } }));
               setGoalUpdatedDay(highestUnlocked);
               setGoalStatement("");
               setNoraChangeMade(true);
@@ -6588,8 +7655,7 @@ Return ONLY valid JSON: {"score": N, "reason": "one short sentence"}`;
             }
 
             if (cmds.changeGoal !== undefined) {
-              plan._answers.goal = cmds.changeGoal;
-              plan._answers.goal_detail = undefined;
+              setPlanState(prev => ({ ...prev, _answers: { ...prev._answers, goal: cmds.changeGoal, goal_detail: undefined } }));
               setGoalUpdatedDay(highestUnlocked);
               setGoalStatement("");
               setNoraChangeMade(true);
@@ -6638,7 +7704,7 @@ Return ONLY valid JSON: {"score": N, "reason": "one short sentence"}`;
                   cmds.slowDown ? "Requested slower pace" : null,
                 ].filter(Boolean);
 
-                const summaryPrompt = `Summarize this Nora coaching session in 2-3 sentences. Focus on: what the person was working through, any blockers or concerns they raised, what was resolved or shifted. Be specific — this summary will inform future task generation and coaching for this person.
+                const summaryPrompt = `Summarize this Nora coaching session in 2-3 sentences. Focus on: what the person was working through, any blockers or concerns they raised, what was resolved or shifted. Be specific, this summary will inform future task generation and coaching for this person.
 
 Session content: "${text?.slice(0, 600) || "brief exchange"}"
 Program changes made: ${changes.length ? changes.join("; ") : "none"}
@@ -6666,6 +7732,112 @@ Write the summary in third person ("They were working on...", "They mentioned...
         />
       )}
 
+      {/* ── PAYWALL MODAL ── */}
+      {!paywallBypassed && doneCount >= 2 && activeDay >= 3 && !celebrationModal && (
+        <div style={{
+          position: "fixed", inset: 0, zIndex: 400,
+          background: "linear-gradient(155deg, #0e0c1f 0%, #1e1a35 55%, #0a0818 100%)",
+          display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+          padding: "24px 16px", overflow: "auto",
+        }}>
+          <div style={{ width: "100%", maxWidth: 420, textAlign: "center" }}>
+            {/* Lock icon */}
+            <div style={{ display: "flex", justifyContent: "center", marginBottom: 20 }}>
+              <div style={{
+                width: 64, height: 64, borderRadius: "50%",
+                background: "rgba(155,143,224,0.12)", border: "2px solid rgba(155,143,224,0.3)",
+                display: "flex", alignItems: "center", justifyContent: "center",
+              }}>
+                <svg width="26" height="28" viewBox="0 0 16 18" fill="none"><rect x="1" y="7" width="14" height="10" rx="2.5" stroke="#B8AFEC" strokeWidth="1.5"/><path d="M4 7V5a4 4 0 0 1 8 0v2" stroke="#B8AFEC" strokeWidth="1.5" strokeLinecap="round"/></svg>
+              </div>
+            </div>
+
+            <p style={{ fontFamily: T.sans, fontSize: 12, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", color: "rgba(155,143,224,0.6)", margin: "0 0 10px" }}>
+              You've built momentum
+            </p>
+            <h2 style={{ fontFamily: T.serif, fontSize: "clamp(26px,5vw,34px)", fontWeight: 400, color: "#fff", margin: "0 0 8px", lineHeight: 1.15, letterSpacing: -0.5 }}>
+              Keep it going.
+            </h2>
+            <p style={{ fontFamily: T.sans, fontSize: 15, color: "rgba(255,255,255,0.5)", margin: "0 0 32px", lineHeight: 1.65 }}>
+              You've completed 2 days. Most people stop here.<br/>The ones who don't are the ones who change.
+            </p>
+
+            {/* Pricing tiers */}
+            <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 28 }}>
+              {/* 3-month — recommended */}
+              <div style={{
+                background: "rgba(155,143,224,0.12)", border: "2px solid rgba(155,143,224,0.4)",
+                borderRadius: 16, padding: "20px 20px 18px", position: "relative", overflow: "hidden",
+              }}>
+                <div style={{ position: "absolute", top: 0, right: 0, background: T.purple, borderRadius: "0 14px 0 10px", padding: "5px 12px" }}>
+                  <span style={{ fontFamily: T.sans, fontSize: 10, fontWeight: 700, color: "#fff", letterSpacing: 1, textTransform: "uppercase" }}>Most popular</span>
+                </div>
+                <div style={{ display: "flex", alignItems: "baseline", gap: 6, marginBottom: 6 }}>
+                  <span style={{ fontFamily: T.sans, fontSize: 32, fontWeight: 800, color: "#fff", lineHeight: 1 }}>$13.99</span>
+                  <span style={{ fontFamily: T.sans, fontSize: 14, color: "rgba(255,255,255,0.4)" }}>/month</span>
+                </div>
+                <p style={{ fontFamily: T.sans, fontSize: 13, fontWeight: 600, color: "rgba(255,255,255,0.7)", margin: "0 0 4px" }}>3 months · $41.97 billed once</p>
+                <p style={{ fontFamily: T.sans, fontSize: 13, color: "rgba(255,255,255,0.35)", margin: 0, lineHeight: 1.5 }}>It takes 8 weeks to build a real habit. This gives you the full runway.</p>
+                <button
+                  onClick={() => { /* payment integration placeholder */ }}
+                  style={{ width: "100%", marginTop: 14, background: "#fff", color: T.black, border: "none", borderRadius: 10, padding: "14px 0", fontFamily: T.sans, fontSize: 15, fontWeight: 700, cursor: "pointer", letterSpacing: -0.2 }}>
+                  Start 3-month plan
+                </button>
+              </div>
+
+              {/* 1-month */}
+              <div style={{
+                background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.1)",
+                borderRadius: 16, padding: "18px 20px",
+              }}>
+                <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+                    <span style={{ fontFamily: T.sans, fontSize: 26, fontWeight: 800, color: "#fff", lineHeight: 1 }}>$19.99</span>
+                    <span style={{ fontFamily: T.sans, fontSize: 14, color: "rgba(255,255,255,0.4)" }}>/month</span>
+                  </div>
+                  <button
+                    onClick={() => { /* payment integration placeholder */ }}
+                    style={{ background: "rgba(255,255,255,0.1)", color: "#fff", border: "1px solid rgba(255,255,255,0.15)", borderRadius: 8, padding: "10px 18px", fontFamily: T.sans, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+                    Start monthly
+                  </button>
+                </div>
+                <p style={{ fontFamily: T.sans, fontSize: 13, color: "rgba(255,255,255,0.35)", margin: "6px 0 0", lineHeight: 1.5 }}>Try it for a month. Cancel anytime.</p>
+              </div>
+
+              {/* Annual */}
+              <div style={{
+                background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.1)",
+                borderRadius: 16, padding: "18px 20px",
+              }}>
+                <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+                    <span style={{ fontFamily: T.sans, fontSize: 26, fontWeight: 800, color: "#fff", lineHeight: 1 }}>$8.99</span>
+                    <span style={{ fontFamily: T.sans, fontSize: 14, color: "rgba(255,255,255,0.4)" }}>/month</span>
+                  </div>
+                  <button
+                    onClick={() => { /* payment integration placeholder */ }}
+                    style={{ background: "rgba(255,255,255,0.1)", color: "#fff", border: "1px solid rgba(255,255,255,0.15)", borderRadius: 8, padding: "10px 18px", fontFamily: T.sans, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+                    Start annual
+                  </button>
+                </div>
+                <p style={{ fontFamily: T.sans, fontSize: 13, color: "rgba(255,255,255,0.35)", margin: "6px 0 0", lineHeight: 1.5 }}>
+                  $107.88/year · <span style={{ color: "rgba(93,202,165,0.8)" }}>Save 55%</span> · Built to reach your 12-month goal.
+                </p>
+              </div>
+            </div>
+
+            {/* Beta bypass */}
+            <button
+              onClick={() => { setPaywallBypassed(true); }}
+              style={{ background: "none", border: "none", fontFamily: T.sans, fontSize: 13, color: "rgba(255,255,255,0.2)", cursor: "pointer", padding: "8px 0", transition: "color 0.15s" }}
+              onMouseEnter={e => e.currentTarget.style.color = "rgba(255,255,255,0.4)"}
+              onMouseLeave={e => e.currentTarget.style.color = "rgba(255,255,255,0.2)"}>
+              I'm a beta tester — continue for free
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* ── WEEKLY CHECK-IN MODAL ── */}
       {weeklyCheckInOpen && (
         <WeeklyCheckInModal
@@ -6683,6 +7855,34 @@ Write the summary in third person ("They were working on...", "They mentioned...
   );
 }
 
+
+// ─── Error Boundary ──────────────────────────────────────
+class ErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { error: null, info: null }; }
+  static getDerivedStateFromError(error) { return { error }; }
+  componentDidCatch(error, info) { this.setState({ info }); console.error("ErrorBoundary caught:", error, info); }
+  render() {
+    if (this.state.error) {
+      return (
+        <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "#fff", padding: 32 }}>
+          <div style={{ maxWidth: 500, textAlign: "center" }}>
+            <p style={{ fontFamily: "Georgia, serif", fontSize: 20, color: "#28243a", marginBottom: 12 }}>Something went wrong</p>
+            <p style={{ fontFamily: "Inter, sans-serif", fontSize: 14, color: "#9892a8", marginBottom: 24, lineHeight: 1.6 }}>The app encountered an error. Try refreshing.</p>
+            <details style={{ textAlign: "left", background: "#f9f8fc", border: "1px solid #dcdaeb", borderRadius: 6, padding: "10px 14px" }}>
+              <summary style={{ fontFamily: "Inter, sans-serif", fontSize: 12, color: "#9892a8", cursor: "pointer" }}>Error details</summary>
+              <pre style={{ fontFamily: "monospace", fontSize: 11, color: "#3a3550", marginTop: 10, whiteSpace: "pre-wrap", wordBreak: "break-all", lineHeight: 1.5 }}>
+                {this.state.error?.toString()}
+                {"\n\n"}
+                {this.state.info?.componentStack || ""}
+              </pre>
+            </details>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 // ─── Root ─────────────────────────────────────────────────
 const PLAN_STORAGE_KEY = "secondact_saved_plan";
@@ -6714,16 +7914,7 @@ export default function SecondActApp() {
     try {
       const dashSaved = await Store.get(storageKey) || {};
       const doneCount = Object.values(dashSaved.dayStatus || {}).filter(s => s === 'done').length;
-      const streakCount = (() => {
-        let s = 0, skipsUsed = 0;
-        const ds = dashSaved.dayStatus || {};
-        for (let d = 1; d <= 56; d++) {
-          if (ds[d] === 'done') s++;
-          else if (ds[d] === 'skipped' && skipsUsed === 0) skipsUsed++;
-          else break;
-        }
-        return s;
-      })();
+      const streakCount = calcStreak(dashSaved.dayStatus || {});
       const planToSave = {
         ...thePlan,
         _resumeDay: doneCount + 1,
@@ -6752,6 +7943,7 @@ export default function SecondActApp() {
   if (!rootLoaded) return <div style={{ minHeight: "100vh", background: "#fff" }} />;
 
   return (
+    <ErrorBoundary>
     <div style={{ minHeight: "100vh", background: "#fff", fontFamily: T.sans }}>
       <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
       {screen === "landing" && <LandingPage onStart={() => { setScreen("quiz"); scrollTop(); }} onResume={resumeProgram} savedPlan={savedPlan} />}
@@ -6760,7 +7952,8 @@ export default function SecondActApp() {
         <GeneratingScreen answers={answers} auditTasks={auditTasks} onComplete={p => { setPlan(p); setScreen("results"); scrollTop(); }} onBack={() => { setScreen("quiz"); scrollTop(); }} />
       )}
       {screen === "results" && answers && plan && <ResultsScreen plan={plan} onRestart={() => { setScreen("quiz"); setAnswers(null); setAuditTasks(null); setPlan(null); scrollTop(); }} onDashboard={(startDate) => goToDashboard(plan, startDate)} />}
-      {screen === "dashboard" && dashboardPlan && <DashboardScreen plan={dashboardPlan} startDate={programStartDate} onBack={() => { setScreen("results"); scrollTop(); }} />}
+      {screen === "dashboard" && dashboardPlan && <DashboardScreen plan={dashboardPlan} startDate={programStartDate} onBack={() => { if (plan) { setScreen("results"); } else { setScreen("landing"); } scrollTop(); }} />}
     </div>
+    </ErrorBoundary>
   );
 }
