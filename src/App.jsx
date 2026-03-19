@@ -2,24 +2,30 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from "react"
 
 // ─── Tokens ───────────────────────────────────────────────
 const T = {
-  serif: "Georgia, 'Times New Roman', serif",
-  sans: "Inter, -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif",
-  display: "Georgia, 'Times New Roman', serif",
-  // Richer type scale
-  black: "#28243a", ink: "#3a3550", body: "#68647a", muted: "#9892a8",
-  border: "#dcdaeb", bg: "#f4f2fa", cream: "#f8f7fc",
-  // Purple family  - slightly warmer
-  purple: "#7c6f9f", purpleD: "#6a5d8e", purpleL: "#f0f1f9", purpleMid: "#b8b0d8",
-  // Dark gradient for hero sections
-  grad: "linear-gradient(155deg, #1e1a2e 0%, #2a2440 55%, #160f28 100%)",
-  // Card shadow token
-  shadow: "0 4px 20px rgba(26,23,48,0.06)",
-  shadowMd: "0 8px 32px rgba(26,23,48,0.10)",
+  serif: "'DM Serif Display', Georgia, serif",
+  sans: "'DM Sans', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif",
+  display: "'DM Serif Display', Georgia, serif",
+  mono: "'Space Mono', monospace",
+  // Warm charcoal text scale
+  black: "#1E1E2A", ink: "#2C2C3A", body: "#5C5C6E", muted: "#9494A6",
+  border: "#E6E4EE", bg: "#FFFDF7", cream: "#FFFDF7",
+  // Brand: warm gold/amber as primary (brilliant = bright)
+  purple: "#E8A820", purpleD: "#D49518", purpleL: "#F0DEB0", purpleMid: "#D8B860",
+  // No gradient — flat warm cream
+  grad: "#F0DEB0",
+  // Shadows with warm tone
+  shadow: "0 2px 16px rgba(30,30,42,0.06)",
+  shadowMd: "0 6px 24px rgba(30,30,42,0.09)",
+  // Supporting pastels (flat, no gradients)
+  mint: "#C8F0D8", mintD: "#2D8C5A", mintL: "#F0FBF4",
+  lavender: "#E0D4F8", lavenderD: "#6B50B8", lavenderL: "#F6F2FF",
+  peach: "#FFD8C4", peachD: "#D06840", peachL: "#FFF4EE",
+  lemon: "#F0D888", lemonD: "#B89A30", lemonL: "#FFF8E0",
+  sky: "#C4E0FF", skyD: "#3878C0", skyL: "#F0F7FF",
 };
 
-// ─── Persistent Storage Helper (localStorage) ────────────
-// All operations are async-compatible for drop-in replacement.
-// Keys are auto-sanitized.
+// ─── Persistent Storage Helper (Vercel / browser-compatible) ─────
+// Uses localStorage for persistence across sessions.
 const Store = {
   _clean(key) {
     return key.replace(/[\s\/\\"']/g, "").slice(0, 195);
@@ -76,7 +82,7 @@ function lkm(arr, idxArr) {
 
 // ─── Storage key builder (shared between root & dashboard) ─
 function buildDashStorageKey(plan) {
-  return `secondact_${[
+  return `bebril_${[
     plan._answers?.name || "",
     plan._answers?.role ?? "",
     plan._answers?.goal ?? "",
@@ -151,46 +157,46 @@ const ARCHETYPE_IDENTITY = {
 
 // Archetype completion lines, shown after completing a task
 const ARCHETYPE_COMPLETION = {
-  "The Compounder":   "That's how operators compound. One real thing at a time.",
-  "The Cartographer":  "You're building the mental model. This is the work.",
-  "The Primed":  "Action is your mechanism. You just proved it.",
-  "The Scout":   "Another piece of the map. The picture is getting clearer.",
-  "The Incumbent":  "Deliberate progress. That's exactly what this profile does.",
-  "The Navigator": "The system is taking shape. This is how strategies get built.",
+  "The Compounder":   "Compounding. That's what this is. Keep stacking.",
+  "The Cartographer":  "Another piece of the map. The picture's getting clearer.",
+  "The Primed":  "Action over theory. You just proved it works.",
+  "The Scout":   "More signal, less noise. The map is filling in.",
+  "The Incumbent":  "Deliberate progress. That's the move.",
+  "The Navigator": "Strategy is a muscle. You just flexed it.",
   "The Launchpad":    "Foundations don't feel dramatic. They just hold everything up.",
-  "The Skeptic": "You earned this one. Evidence-first means results that stick.",
-  "The Pivot":  "Steady motion. That's the whole game.",
+  "The Skeptic": "Evidence in the bank. That's how trust gets built.",
+  "The Pivot":  "Forward motion. That's the whole game right now.",
 };
 
 
 const PROFILE_BASE = {
-  "The Compounder":   { color: "#0F6E56", bg: "#E1F5EE", border: "#5DCAA5", taskEmphasis: "apply",   voice: "peer",     pacing: "dense" },
-  "The Cartographer":  { color: "#185FA5", bg: "#E6F1FB", border: "#85B7EB", taskEmphasis: "read",    voice: "advisor",  pacing: "deep" },
-  "The Primed":  { color: "#6B5CE7", bg: "#EEEDFE", border: "#AFA9EC", taskEmphasis: "apply",   voice: "coach",    pacing: "momentum" },
-  "The Scout":   { color: "#5C7CE7", bg: "#EEF0FE", border: "#A9B4EC", taskEmphasis: "read",    voice: "guide",    pacing: "progressive" },
-  "The Incumbent":  { color: "#854F0B", bg: "#FAEEDA", border: "#EF9F27", taskEmphasis: "reflect", voice: "honest",   pacing: "deliberate" },
-  "The Navigator": { color: "#2D5F9A", bg: "#E4EEF8", border: "#7EA8D0", taskEmphasis: "reflect", voice: "advisor",  pacing: "deep" },
-  "The Launchpad":    { color: "#2D7D9A", bg: "#E4F3F8", border: "#7ECCE0", taskEmphasis: "apply",   voice: "guide",    pacing: "gentle" },
-  "The Skeptic": { color: "#6B4DA3", bg: "#F0ECFE", border: "#B5A3DC", taskEmphasis: "read",    voice: "evidence", pacing: "earned" },
-  "The Pivot":  { color: "#A32D2D", bg: "#FCEBEB", border: "#F09595", taskEmphasis: "reflect", voice: "evidence", pacing: "earned" },
+  "The Compounder":   { color: "#2D9B6B", bg: "#EEFBF3", border: "#B8F0D8", taskEmphasis: "apply",   voice: "peer",     pacing: "dense" },
+  "The Cartographer":  { color: "#4080C0", bg: "#F0F8FF", border: "#C0E0FF", taskEmphasis: "read",    voice: "advisor",  pacing: "deep" },
+  "The Primed":  { color: "#7B5EC2", bg: "#F5F0FF", border: "#D8C8F8", taskEmphasis: "apply",   voice: "coach",    pacing: "momentum" },
+  "The Scout":   { color: "#5C8CE7", bg: "#F0F4FF", border: "#C0D0F8", taskEmphasis: "read",    voice: "guide",    pacing: "progressive" },
+  "The Incumbent":  { color: "#D06840", bg: "#FFF4EE", border: "#FFD8C4", taskEmphasis: "reflect", voice: "honest",   pacing: "deliberate" },
+  "The Navigator": { color: "#4080C0", bg: "#F0F8FF", border: "#C0E0FF", taskEmphasis: "reflect", voice: "advisor",  pacing: "deep" },
+  "The Launchpad":    { color: "#2D9B6B", bg: "#EEFBF3", border: "#B8F0D8", taskEmphasis: "apply",   voice: "guide",    pacing: "gentle" },
+  "The Skeptic": { color: "#7B5EC2", bg: "#F5F0FF", border: "#D8C8F8", taskEmphasis: "read",    voice: "evidence", pacing: "earned" },
+  "The Pivot":  { color: "#D06840", bg: "#FFF4EE", border: "#FFD8C4", taskEmphasis: "reflect", voice: "evidence", pacing: "earned" },
 };
 
 // ─── Achievement definitions ───────────────────────────────
 // id: unique key | icon: emoji | name: displayed title | desc: one-line what it means
-// earned: fn(ctx) → bool, where ctx = { dayStatus, dayTasks, streakCount, noraChangeMade, noraPickDay }
+// earned: fn(ctx) → bool, where ctx = { dayStatus, dayTasks, streakCount, brilChangeMade, brilPickDay }
 const ACHIEVEMENTS = [
   {
     id: "first_move",
     icon: "⚡",
-    name: "The First Move",
-    desc: "Completed Day 1.",
+    name: "First Move",
+    desc: "Day 1 done. The hardest one.",
     earned: ({ dayStatus }) => dayStatus[1] === 'done',
   },
   {
     id: "no_excuses",
     icon: "↩",
-    name: "No Excuses",
-    desc: "Completed a day right after skipping one.",
+    name: "Bounce Back",
+    desc: "Came back strong after a skip.",
     earned: ({ dayStatus }) => {
       for (let d = 2; d <= 56; d++) {
         if (dayStatus[d - 1] === 'skipped' && dayStatus[d] === 'done') return true;
@@ -201,8 +207,8 @@ const ACHIEVEMENTS = [
   {
     id: "perfect_week",
     icon: "🏅",
-    name: "Perfect Week",
-    desc: "7/7 days completed in a single week.",
+    name: "Flawless Week",
+    desc: "7/7. Absolute machine.",
     earned: ({ dayStatus }) => {
       for (let w = 0; w < 8; w++) {
         const allDone = Array.from({ length: 7 }, (_, i) => w * 7 + i + 1).every(d => dayStatus[d] === 'done');
@@ -214,15 +220,15 @@ const ACHIEVEMENTS = [
   {
     id: "compounding",
     icon: "🔥",
-    name: "Compounding",
-    desc: "14 days in a row.",
+    name: "On Fire",
+    desc: "14 straight. The streak is real.",
     earned: ({ streakCount }) => streakCount >= 14,
   },
   {
     id: "deep_cut",
     icon: "🔍",
-    name: "Deep Cut",
-    desc: "Completed 3 or more Reflect tasks.",
+    name: "Deep Thinker",
+    desc: "3+ Reflect tasks. Introspection unlocked.",
     earned: ({ dayStatus, dayTasks }) => {
       const count = Object.entries(dayTasks).filter(([d, t]) => dayStatus[d] === 'done' && t?.tag === 'Reflect').length;
       return count >= 3;
@@ -232,7 +238,7 @@ const ACHIEVEMENTS = [
     id: "builder",
     icon: "🔨",
     name: "Builder",
-    desc: "Completed 5 or more Apply tasks.",
+    desc: "5+ Apply tasks. Shipping, not just thinking.",
     earned: ({ dayStatus, dayTasks }) => {
       const count = Object.entries(dayTasks).filter(([d, t]) => dayStatus[d] === 'done' && t?.tag === 'Apply').length;
       return count >= 5;
@@ -241,39 +247,39 @@ const ACHIEVEMENTS = [
   {
     id: "shifted",
     icon: "🧭",
-    name: "Shifted",
-    desc: "Changed your goal or weekly focus with Nora.",
-    earned: ({ noraChangeMade }) => noraChangeMade,
+    name: "Plot Twist",
+    desc: "Changed direction with Be Brilliant. Flexibility is a superpower.",
+    earned: ({ brilChangeMade }) => brilChangeMade,
   },
   {
-    id: "noras_pick",
+    id: "brils_pick",
     icon: "✨",
-    name: "Nora's Pick",
-    desc: "Completed a task Nora built just for you.",
-    earned: ({ noraPickDay, dayStatus }) => noraPickDay && dayStatus[noraPickDay] === 'done',
+    name: "Be Brilliant's Pick",
+    desc: "Did a task Be Brilliant designed just for you.",
+    earned: ({ brilPickDay, dayStatus }) => brilPickDay && dayStatus[brilPickDay] === 'done',
   },
   {
     id: "halfway",
     icon: "🏔",
-    name: "Halfway",
-    desc: "Completed 4 full weeks.",
+    name: "Halfway There",
+    desc: "4 weeks in. Deep end territory.",
     earned: ({ dayStatus }) => Array.from({ length: 28 }, (_, i) => i + 1).filter(d => dayStatus[d] === 'done').length >= 20,
   },
   {
     id: "full_program",
     icon: "🎓",
-    name: "Full Program",
-    desc: "56 days. You built something real.",
+    name: "The Full Brilliant",
+    desc: "56 days. The whole thing. Legend.",
     earned: ({ dayStatus }) => Object.values(dayStatus).filter(s => s === 'done').length >= 50,
   },
 ];
 
 // ─── Creds tier milestones ─────────────────────────────────
 const CRED_MILESTONES = [
-  { at: 50,  tier: "Operative",  copy: "You've moved past intention. This is what consistency looks like." },
-  { at: 100, tier: "Strategist", copy: "A hundred Creds in. The program is working." },
-  { at: 200, tier: "Senior",     copy: "Two hundred Creds. Most people never get here." },
-  { at: 350, tier: "Principal",  copy: "This is what real commitment looks like." },
+  { at: 50,  tier: "Operative",  copy: "50 Creds. You're officially not messing around." },
+  { at: 100, tier: "Strategist", copy: "Triple digits. The program is working and you know it." },
+  { at: 200, tier: "Senior",     copy: "200 Creds. Most people never get here. You're built different." },
+  { at: 350, tier: "Principal",  copy: "350. At this point we should be asking YOU for advice." },
 ];
 
 function buildProfile(profileName, role, seniority, answers, classification) {
@@ -767,7 +773,7 @@ const questions = [
   {
     id: "name", label: "1 of 7",
     text: "What's your first name?",
-    sub: "Just your first name is fine.",
+    sub: "We'll use this to personalize everything.",
     type: "text",
     placeholder: "First name",
   },
@@ -2023,61 +2029,53 @@ const FONTS = ``; // Font loaded via <link> in root component
 
 // ─── Design Tokens ────────────────────────────────────────
 const C = {
-  // Dark backgrounds
-  bg0:      "#08080F",   // deepest, hero base
-  bg1:      "#0F0F1C",   // hero gradient mid
-  bg2:      "#13131F",   // hero gradient end
+  // Flat light backgrounds — no gradients
+  bg0:      "#FFFDF7",   // warm cream base
+  bg1:      "#FFFDF7",   // same — no gradient
+  bg2:      "#FFFDF7",   // same
 
-  // Accent, refined warm lavender
-  accent:   "#9B8FE0",
-  accentL:  "#B8AFEC",
-  accentLL: "#EAE8FA",
-  accentD:  "#6C60C2",
+  // Accent: warm gold
+  accent:   "#E8A820",
+  accentL:  "#F0C050",
+  accentLL: "#EDD8A0",
+  accentD:  "#D49518",
 
-  // Light section
-  offWhite: "#FAFAF9",
+  // Sections
+  offWhite: "#FFFDF7",
   white:    "#FFFFFF",
 
-  // Text
-  textHero:   "#FFFFFF",
-  textDim:    "rgba(255,255,255,0.58)",
-  textMuted:  "rgba(255,255,255,0.34)",
-  ink:        "#1A1830",
-  body:       "#4D4A68",
-  muted:      "#9693B0",
+  // Text (dark on light)
+  textHero:   "#1E1E2A",
+  textDim:    "rgba(30,30,42,0.6)",
+  textMuted:  "rgba(30,30,42,0.4)",
+  ink:        "#1E1E2A",
+  body:       "#5C5C6E",
+  muted:      "#9494A6",
 
   // UI
-  border:     "#E9E7F5",
-  borderD:    "rgba(255,255,255,0.10)",
-  cardShadow: "0 2px 16px rgba(15,14,30,0.07), 0 8px 40px rgba(15,14,30,0.05)",
+  border:     "#E6E4EE",
+  borderD:    "rgba(30,30,42,0.1)",
+  cardShadow: "0 2px 16px rgba(30,30,42,0.06)",
+
+  // Pastel supporting (flat)
+  mint: "#C8F0D8",
+  lemon: "#F0D888",
+  lavender: "#E0D4F8",
+  sky: "#C4E0FF",
+  peach: "#FFD8C4",
 };
 
 // ─── Logo SVG (arc + glow dot) ────────────────────────────
-const Logo = React.memo(function Logo({ size = 28 }) {
+const Logo = React.memo(function Logo({ size = 28, dark = false }) {
+  const s = size;
   return (
-    <svg width={size} height={size * 0.65} viewBox="0 0 56 36" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <defs>
-        <linearGradient id="arcGrad" x1="0%" y1="100%" x2="100%" y2="0%">
-          <stop offset="0%" stopColor="#7B6FCC" />
-          <stop offset="100%" stopColor="#B0A8F0" />
-        </linearGradient>
-        <radialGradient id="dotGlow" cx="50%" cy="50%" r="50%">
-          <stop offset="0%" stopColor="#C4BDF7" stopOpacity="1" />
-          <stop offset="100%" stopColor="#8B7EE8" stopOpacity="0" />
-        </radialGradient>
-      </defs>
-      {/* Arc */}
-      <path
-        d="M4 32 A24 24 0 0 1 52 32"
-        stroke="url(#arcGrad)"
-        strokeWidth="3.5"
-        strokeLinecap="round"
-        fill="none"
-      />
-      {/* Glow circle */}
-      <circle cx="28" cy="26" r="5" fill="url(#dotGlow)" opacity="0.6" />
-      {/* Core dot */}
-      <circle cx="28" cy="26" r="2.5" fill="#C4BDF7" />
+    <svg width={s} height={s} viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
+      {/* Rounded square bg */}
+      <rect x="2" y="2" width="32" height="32" rx="9" fill={dark ? "#1E1E2A" : "#E8A820"} />
+      {/* Four-pointed sparkle star */}
+      <path d="M18 8 C18.5 14 22 17.5 28 18 C22 18.5 18.5 22 18 28 C17.5 22 14 18.5 8 18 C14 17.5 17.5 14 18 8Z" fill="#fff" />
+      {/* Tiny dot accent */}
+      <circle cx="25" cy="10" r="1.5" fill="#fff" opacity="0.6" />
     </svg>
   );
 });
@@ -2112,12 +2110,12 @@ const Pill = React.memo(function Pill({ children, light = false }) {
   return (
     <span style={{
       display: "inline-flex", alignItems: "center", gap: 6,
-      fontFamily: "Inter, sans-serif", fontSize: 11, fontWeight: 600,
+      fontFamily: "'DM Sans', sans-serif", fontSize: 11, fontWeight: 600,
       letterSpacing: "0.08em", textTransform: "uppercase",
       padding: "6px 13px", borderRadius: 100,
-      background: light ? C.accentLL : "rgba(155,143,224,0.12)",
-      color: light ? C.accentD : C.accentL,
-      border: light ? `1px solid ${C.accentLL}` : "1px solid rgba(155,143,224,0.22)",
+      background: light ? C.accentLL : "rgba(232,168,32,0.08)",
+      color: light ? C.accentD : C.accentD,
+      border: light ? `1px solid ${C.peach}` : "1px solid rgba(232,168,32,0.15)",
     }}>
       {children}
     </span>
@@ -2128,7 +2126,7 @@ const Pill = React.memo(function Pill({ children, light = false }) {
 function Label({ children, light = false }) {
   return (
     <p style={{
-      fontFamily: "Inter, sans-serif", fontSize: 11, fontWeight: 700,
+      fontFamily: "'DM Sans', sans-serif", fontSize: 11, fontWeight: 700,
       letterSpacing: "0.12em", textTransform: "uppercase",
       color: light ? C.accentD : C.accent,
       margin: "0 0 16px",
@@ -2204,7 +2202,7 @@ function HeadlineTypewriter() {
         overflow: "hidden",
       }}>
         <span style={{
-          fontFamily: "Georgia, 'Times New Roman', serif",
+          fontFamily: "'DM Serif Display', Georgia, serif",
           fontSize: "clamp(28px, 5vw, 60px)",
           fontWeight: 400,
           lineHeight: 1.12,
@@ -2219,7 +2217,7 @@ function HeadlineTypewriter() {
       {/* Line 2, typewriter */}
       <div style={{ minHeight: "1.2em" }}>
         <span style={{
-          fontFamily: "Georgia, 'Times New Roman', serif",
+          fontFamily: "'DM Serif Display', Georgia, serif",
           fontSize: "clamp(28px, 5vw, 60px)",
           fontWeight: 400,
           lineHeight: 1.12,
@@ -2255,67 +2253,79 @@ function LandingPage({ onStart, onResume, savedPlan }) {
   }, []);
 
   return (
-    <div style={{ fontFamily: "Inter, sans-serif", background: C.offWhite }}>
+    <div style={{ fontFamily: "'DM Sans', sans-serif", background: C.offWhite }}>
       <style>{`
         ${FONTS}
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
         html { scroll-behavior: smooth; }
+
+        @keyframes float1 { 0%, 100% { transform: translateY(0) rotate(12deg); } 50% { transform: translateY(-14px) rotate(16deg); } }
+        @keyframes float2 { 0%, 100% { transform: translateY(0) rotate(-8deg); } 50% { transform: translateY(-10px) rotate(-4deg); } }
+        @keyframes float3 { 0%, 100% { transform: translateY(0) rotate(20deg); } 50% { transform: translateY(-8px) rotate(24deg); } }
+        @keyframes wiggle { 0%, 100% { transform: rotate(0); } 25% { transform: rotate(-2deg); } 75% { transform: rotate(2deg); } }
+        @keyframes pop { 0% { transform: scale(0.8); opacity: 0; } 60% { transform: scale(1.05); } 100% { transform: scale(1); opacity: 1; } }
+        @keyframes sparkle { 0%, 100% { opacity: 0.4; transform: scale(0.8); } 50% { opacity: 1; transform: scale(1.2); } }
+        @keyframes slideUp { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes confettiFall { 0% { transform: translateY(-20px) rotate(0); opacity: 1; } 100% { transform: translateY(60px) rotate(360deg); opacity: 0; } }
 
         .sa-nav-sticky {
           position: fixed; top: 0; left: 0; right: 0; z-index: 100;
           transition: background 0.3s, box-shadow 0.3s, border-color 0.3s;
         }
         .sa-nav-scrolled {
-          background: rgba(8, 8, 15, 0.92) !important;
+          background: rgba(255, 253, 247, 0.95) !important;
           backdrop-filter: blur(16px);
-          border-bottom: 1px solid rgba(255,255,255,0.07) !important;
+          border-bottom: 1px solid rgba(232,168,32,0.12) !important;
+          box-shadow: 0 2px 12px rgba(30,30,42,0.04) !important;
         }
 
         .sa-btn-primary {
           display: inline-flex; align-items: center; gap: 8px;
-          font-family: Inter, sans-serif; font-size: 15px; font-weight: 600;
-          letter-spacing: -0.2px; color: #08080F;
-          background: #FFFFFF; border: none; border-radius: 8px;
+          font-family: 'DM Sans', sans-serif; font-size: 15px; font-weight: 600;
+          letter-spacing: -0.2px; color: #1E1E2A;
+          background: #E8A820; border: none; border-radius: 50px;
           padding: 14px 28px; cursor: pointer;
           transition: transform 0.18s ease, box-shadow 0.18s ease, background 0.18s;
-          box-shadow: 0 1px 2px rgba(0,0,0,0.08);
+          box-shadow: 0 2px 12px rgba(232,168,32,0.25);
           white-space: nowrap;
         }
         .sa-btn-primary:hover {
-          background: #F0EFF8; transform: translateY(-2px);
-          box-shadow: 0 8px 28px rgba(0,0,0,0.16);
+          background: #D49518; transform: translateY(-2px);
+          box-shadow: 0 6px 24px rgba(232,168,32,0.35);
         }
         .sa-btn-primary-light {
           display: inline-flex; align-items: center; gap: 8px;
-          font-family: Inter, sans-serif; font-size: 15px; font-weight: 600;
-          letter-spacing: -0.2px; color: #FFFFFF;
-          background: ${C.accentD}; border: none; border-radius: 8px;
+          font-family: 'DM Sans', sans-serif; font-size: 15px; font-weight: 600;
+          letter-spacing: -0.2px; color: #1E1E2A;
+          background: ${C.accentD}; border: none; border-radius: 50px;
           padding: 14px 28px; cursor: pointer;
           transition: transform 0.18s ease, box-shadow 0.18s ease;
-          box-shadow: 0 2px 12px rgba(108,96,194,0.35);
+          box-shadow: 0 2px 12px rgba(232,168,32,0.25);
           white-space: nowrap;
         }
         .sa-btn-primary-light:hover {
           transform: translateY(-2px);
-          box-shadow: 0 8px 28px rgba(108,96,194,0.45);
+          box-shadow: 0 6px 24px rgba(232,168,32,0.35);
         }
         .sa-btn-ghost {
           display: inline-flex; align-items: center;
-          font-family: Inter, sans-serif; font-size: 13px; font-weight: 500;
-          color: rgba(255,255,255,0.55); background: transparent;
-          border: 1px solid rgba(255,255,255,0.14); border-radius: 7px;
+          font-family: 'DM Sans', sans-serif; font-size: 13px; font-weight: 500;
+          color: ${C.body}; background: transparent;
+          border: 1.5px solid ${C.border}; border-radius: 50px;
           padding: 9px 18px; cursor: pointer;
           transition: border-color 0.2s, color 0.2s;
           white-space: nowrap;
         }
-        .sa-btn-ghost:hover { border-color: rgba(255,255,255,0.35); color: rgba(255,255,255,0.9); }
+        .sa-btn-ghost:hover { border-color: ${C.accentD}; color: ${C.accentD}; }
 
         .sa-step-card {
-          background: ${C.white}; border: 1px solid ${C.border};
-          border-radius: 16px; padding: 28px 28px;
-          transition: transform 0.2s, box-shadow 0.2s;
+          background: ${C.white}; border: 1.5px solid ${C.border};
+          border-radius: 20px; padding: 28px 28px;
+          transition: transform 0.25s, box-shadow 0.25s, border-color 0.25s;
         }
-        .sa-step-card:hover { transform: translateY(-3px); box-shadow: ${C.cardShadow}; }
+        .sa-step-card:hover { transform: translateY(-4px) rotate(-0.5deg); box-shadow: ${C.cardShadow}; border-color: ${C.accent}; }
+        .sa-btn-primary:active { transform: scale(0.97); }
+        .sa-btn-ghost:active { transform: scale(0.97); }
 
         .sa-comparison-scroll {
           overflow-x: auto;
@@ -2333,13 +2343,6 @@ function LandingPage({ onStart, onResume, savedPlan }) {
           .sa-footer-inner { flex-direction: column !important; gap: 16px !important; align-items: flex-start !important; }
           .sa-dashboard-frame { text-align: left !important; }
           .sa-dashboard-frame p { text-align: left !important; }
-          .sa-comparison-scroll { overflow-x: auto !important; -webkit-overflow-scrolling: touch; margin: 0 -16px; padding: 0 16px; }
-          .sa-comparison-table { min-width: 560px !important; font-size: 12px !important; }
-          .sa-comparison-table .sa-comp-label { padding: 14px 12px 14px 14px !important; min-width: 100px !important; }
-          .sa-comparison-table .sa-comp-cell { padding: 14px 16px !important; }
-        }
-        @media (max-width: 380px) {
-          .sa-hero-cta .sa-btn-primary { font-size: 15px !important; padding: 14px 24px !important; }
         }
       `}</style>
 
@@ -2351,9 +2354,9 @@ function LandingPage({ onStart, onResume, savedPlan }) {
         <div style={{ maxWidth: 1080, margin: "0 auto", padding: "0 clamp(16px,4vw,40px)", height: 64, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 }}>
           {/* Brand */}
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <Logo size={26} />
-            <span style={{ fontFamily: "Inter, sans-serif", fontSize: 16, fontWeight: 700, color: C.textHero, letterSpacing: "-0.4px" }}>
-              Second Act
+            <Logo size={32} />
+            <span style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 18, fontWeight: 700, color: C.ink, letterSpacing: "-0.4px" }}>
+              Be Brilliant
             </span>
           </div>
 
@@ -2364,64 +2367,66 @@ function LandingPage({ onStart, onResume, savedPlan }) {
                 Resume program
               </button>
             )}
+
           </div>
         </div>
       </nav>
 
       {/* ── HERO ────────────────────────────────────────────── */}
       <section style={{
-        background: `linear-gradient(160deg, ${C.bg0} 0%, ${C.bg1} 50%, ${C.bg2} 100%)`,
+        background: C.offWhite,
         minHeight: "100vh",
         display: "flex", flexDirection: "column", justifyContent: "center",
         padding: "120px clamp(16px,5vw,40px) 100px",
         position: "relative", overflow: "hidden",
       }}>
-        {/* Ambient orbs */}
-        <div style={{ position: "absolute", top: "15%", right: "8%", width: 560, height: 560, borderRadius: "50%", background: "radial-gradient(circle, rgba(120,108,200,0.14) 0%, transparent 68%)", pointerEvents: "none" }} />
-        <div style={{ position: "absolute", bottom: "10%", left: "-5%", width: 400, height: 400, borderRadius: "50%", background: "radial-gradient(circle, rgba(80,140,200,0.07) 0%, transparent 68%)", pointerEvents: "none" }} />
+        {/* Floating geometric decorations */}
+        <div style={{ position: "absolute", top: 60, right: "8%", width: 80, height: 80, borderRadius: 20, background: C.lemon, pointerEvents: "none", opacity: 0.7, animation: "float1 6s ease-in-out infinite" }} />
+        <div style={{ position: "absolute", top: "35%", right: "4%", width: 40, height: 40, borderRadius: "50%", background: C.mint, pointerEvents: "none", opacity: 0.6, animation: "sparkle 4s ease-in-out infinite 1s" }} />
+        <div style={{ position: "absolute", bottom: "18%", left: "5%", width: 60, height: 60, borderRadius: 14, background: C.lavender, pointerEvents: "none", opacity: 0.5, animation: "float2 7s ease-in-out infinite 0.5s" }} />
+        <div style={{ position: "absolute", bottom: "8%", right: "15%", width: 28, height: 28, borderRadius: "50%", background: C.peach, pointerEvents: "none", opacity: 0.6, animation: "sparkle 3s ease-in-out infinite 2s" }} />
+        <div style={{ position: "absolute", top: "20%", left: "10%", width: 20, height: 20, borderRadius: 6, background: C.sky, pointerEvents: "none", opacity: 0.5, animation: "float3 5s ease-in-out infinite 1.5s" }} />
+        <div style={{ position: "absolute", top: "55%", left: "15%", width: 14, height: 14, borderRadius: "50%", background: C.accent, pointerEvents: "none", opacity: 0.3, animation: "sparkle 5s ease-in-out infinite 0.8s" }} />
+        <div style={{ position: "absolute", top: 120, left: "50%", width: 24, height: 24, borderRadius: 8, background: C.peach, pointerEvents: "none", opacity: 0.35, animation: "float1 8s ease-in-out infinite 3s" }} />
 
         <div style={{ maxWidth: 760, margin: "0 auto", textAlign: "center", position: "relative", zIndex: 1 }}>
-
-          {/* Headline halo */}
-          <div style={{
-            position: "absolute", top: "50%", left: "50%",
-            transform: "translate(-50%, -50%)",
-            width: 700, height: 340,
-            borderRadius: "50%",
-            background: "radial-gradient(ellipse, rgba(155,143,224,0.18) 0%, rgba(108,96,194,0.08) 40%, transparent 70%)",
-            pointerEvents: "none",
-            zIndex: 0,
-          }} />
 
           {/* Headline */}
           <FadeIn delay={80}>
             <h1 style={{
-              fontFamily: "Georgia, 'Times New Roman', serif",
-              fontSize: "clamp(32px, 5.5vw, 60px)",
+              fontFamily: "'DM Serif Display', Georgia, serif",
+              fontSize: "clamp(36px, 6vw, 68px)",
               fontWeight: 400,
-              lineHeight: 1.12,
+              lineHeight: 1.1,
               color: C.textHero,
-              letterSpacing: "-0.5px",
-              margin: "0 0 36px",
+              letterSpacing: "-1px",
+              margin: "0 0 28px",
               position: "relative",
               zIndex: 1,
             }}>
-              Get <span style={{ color: C.accentL, fontStyle: "italic" }}>unstuck</span> in your career
+              Stuck in your career?{" "}
+              <br />
+              Make a{" "}
+              <span style={{ color: C.accentD, fontStyle: "italic", position: "relative", display: "inline-block" }}>
+                brilliant
+                <span style={{ position: "absolute", bottom: -2, left: 0, right: 0, height: 6, background: C.lemon, borderRadius: 3, zIndex: -1 }} />
+              </span>
+              {" "}move.
             </h1>
           </FadeIn>
 
           {/* Subhead */}
           <FadeIn delay={160}>
             <p style={{
-              fontFamily: "Inter, sans-serif",
-              fontSize: "clamp(15px, 2vw, 17px)",
-              lineHeight: 1.8,
-              color: "rgba(255,255,255,0.52)",
-              maxWidth: 560,
-              margin: "0 auto 52px",
-              fontWeight: 300,
+              fontFamily: "'DM Sans', sans-serif",
+              fontSize: "clamp(16px, 2vw, 19px)",
+              lineHeight: 1.75,
+              color: C.body,
+              maxWidth: 520,
+              margin: "0 auto 48px",
+              fontWeight: 400,
             }}>
-              Second Act is your thinking partner: it helps you get moving, nudges you when you hesitate, and turns your ideas into a plan you can follow, one day at a time.
+              Be Brilliant is your thinking partner that actually gets you moving. One task a day, zero fluff, and just enough gentle roasting to keep you honest.
             </p>
           </FadeIn>
 
@@ -2429,20 +2434,21 @@ function LandingPage({ onStart, onResume, savedPlan }) {
           {savedPlan && (
             <FadeIn delay={220}>
               <div style={{
-                maxWidth: 420, margin: "0 auto 32px",
-                background: "rgba(255,255,255,0.06)", backdropFilter: "blur(10px)",
-                border: "1px solid rgba(255,255,255,0.12)", borderRadius: 14,
+                maxWidth: 420, margin: "0 auto 28px",
+                background: "#fff",
+                border: `1.5px solid ${C.border}`, borderRadius: 18,
                 padding: "18px 22px", display: "flex", alignItems: "center", gap: 14,
+                boxShadow: C.cardShadow,
               }}>
-                <div style={{ width: 40, height: 40, borderRadius: "50%", background: "rgba(155,143,224,0.25)", border: "1px solid rgba(155,143,224,0.4)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                  <Logo size={18} />
+                <div style={{ width: 40, height: 40, borderRadius: 12, background: C.accentLL, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                  <Logo size={24} />
                 </div>
                 <div style={{ flex: 1, textAlign: "left" }}>
-                  <p style={{ fontFamily: "Inter", fontSize: 11, fontWeight: 600, letterSpacing: "0.1em", textTransform: "uppercase", color: "rgba(255,255,255,0.35)", marginBottom: 3 }}>Your program is waiting</p>
-                  <p style={{ fontFamily: "Inter", fontSize: 15, fontWeight: 600, color: "#fff", marginBottom: 2 }}>
+                  <p style={{ fontFamily: "'DM Sans'", fontSize: 11, fontWeight: 600, letterSpacing: "0.1em", textTransform: "uppercase", color: C.muted, marginBottom: 3 }}>Psst — you left off here</p>
+                  <p style={{ fontFamily: "'DM Sans'", fontSize: 15, fontWeight: 600, color: C.ink, marginBottom: 2 }}>
                     {savedPlan._answers?.name ? savedPlan._answers.name : "Your program"}
                   </p>
-                  <p style={{ fontFamily: "Inter", fontSize: 12, color: "rgba(255,255,255,0.4)" }}>
+                  <p style={{ fontFamily: "'DM Sans'", fontSize: 12, color: C.muted }}>
                     {savedPlan._resumeDay > 1 ? `Day ${savedPlan._resumeDay} · ` : ""}Career program
                   </p>
                 </div>
@@ -2452,10 +2458,10 @@ function LandingPage({ onStart, onResume, savedPlan }) {
 
           {/* CTAs */}
           <FadeIn delay={260}>
-            <div className="sa-hero-cta" style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 12, marginBottom: 0 }}>
+            <div className="sa-hero-cta" style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 12, marginBottom: 16 }}>
               {savedPlan
                 ? <button onClick={onResume} className="sa-btn-primary" style={{ fontSize: 16, padding: "16px 36px" }}>Continue program →</button>
-                : <button onClick={onStart} className="sa-btn-primary" style={{ fontSize: 16, padding: "16px 36px" }}>Get my plan →</button>
+                : <button onClick={onStart} className="sa-btn-primary" style={{ fontSize: 16, padding: "16px 36px" }}>Get my plan (it's free) →</button>
               }
               {savedPlan && (
                 <button onClick={onStart} className="sa-btn-ghost">Start fresh instead</button>
@@ -2471,19 +2477,19 @@ function LandingPage({ onStart, onResume, savedPlan }) {
         <div style={{ maxWidth: 640, margin: "0 auto" }}>
           <FadeIn>
             <Label light>Sound familiar?</Label>
-            <h2 style={{ fontFamily: "Georgia, 'Times New Roman', serif", fontSize: "clamp(26px, 4vw, 38px)", fontWeight: 400, color: C.ink, lineHeight: 1.35, letterSpacing: "-0.5px", marginBottom: 36 }}>
-              You've built skills, experience, and credibility in your field.
+            <h2 style={{ fontFamily: "'DM Serif Display', Georgia, serif", fontSize: "clamp(26px, 4vw, 38px)", fontWeight: 400, color: C.ink, lineHeight: 1.35, letterSpacing: "-0.5px", marginBottom: 36 }}>
+              Genius is nice. A working process is nicer.
             </h2>
           </FadeIn>
           <FadeIn delay={100}>
-            <p style={{ fontFamily: "Inter", fontSize: 16, color: C.body, lineHeight: 1.85, fontWeight: 300, marginBottom: 24 }}>
-              But something keeps pulling at you... a decision you haven't made, a direction you haven't committed to, a sense that you could be doing something more aligned.
+            <p style={{ fontFamily: "'DM Sans'", fontSize: 16, color: C.body, lineHeight: 1.85, fontWeight: 400, marginBottom: 24 }}>
+              You've read the articles. Saved the podcasts. Maybe even started a course (twice). But the gap between "I should really do something" and actually doing it? That gap has its own postcode at this point.
             </p>
           </FadeIn>
           <FadeIn delay={180}>
-            <div style={{ borderLeft: `3px solid ${C.accentD}`, paddingLeft: 22, marginTop: 16 }}>
-              <p style={{ fontFamily: "Inter", fontSize: 15, color: C.body, margin: 0, lineHeight: 1.85, fontWeight: 400 }}>
-                Second Act provides you with a research-backed structure that helps you figure out where you stand, what to focus on, and how to move forward, step by step.
+            <div style={{ background: C.lemon, borderRadius: 16, padding: "20px 24px", marginTop: 16 }}>
+              <p style={{ fontFamily: "'DM Sans'", fontSize: 15, color: C.ink, margin: 0, lineHeight: 1.85, fontWeight: 500 }}>
+                Be Brilliant gives you a daily system based on where you actually are — not where LinkedIn thinks you should be. Research-backed, personality-matched, and refreshingly specific. Turns out it's mostly structure. 🎯
               </p>
             </div>
           </FadeIn>
@@ -2491,54 +2497,54 @@ function LandingPage({ onStart, onResume, savedPlan }) {
       </section>
 
       {/* ── COMPARISON ──────────────────────────────────────── */}
-      <section id="why-second-act" style={{ background: C.white, padding: "96px clamp(16px,5vw,40px) 96px" }}>
+      <section id="why-bebril" style={{ background: C.white, padding: "96px clamp(16px,5vw,40px) 96px" }}>
         <div style={{ maxWidth: 860, margin: "0 auto" }}>
           <FadeIn>
             <div style={{ textAlign: "center", marginBottom: 56 }}>
-              <Label light>Why Second Act</Label>
-              <h2 style={{ fontFamily: "Georgia, 'Times New Roman', serif", fontSize: "clamp(26px, 4vw, 38px)", fontWeight: 400, color: C.ink, letterSpacing: "-0.5px", lineHeight: 1.2 }}>
-                A smart complement to traditional coaching
+              <Label light>Why Be Brilliant</Label>
+              <h2 style={{ fontFamily: "'DM Serif Display', Georgia, serif", fontSize: "clamp(26px, 4vw, 38px)", fontWeight: 400, color: C.ink, letterSpacing: "-0.5px", lineHeight: 1.2 }}>
+                A daily system for people tired of relying on vibes.
               </h2>
             </div>
           </FadeIn>
 
           <FadeIn delay={80}>
-            <div className="sa-comparison-scroll" style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
-            <div className="sa-comparison-table" style={{ borderRadius: 20, overflow: "hidden", boxShadow: "0 8px 48px rgba(15,14,30,0.10), 0 2px 12px rgba(15,14,30,0.05)", minWidth: 560 }}>
+            <div className="sa-comparison-scroll" style={{ WebkitOverflowScrolling: "touch" }}>
+            <div style={{ borderRadius: 20, overflow: "hidden", boxShadow: "0 8px 48px rgba(15,14,30,0.10), 0 2px 12px rgba(15,14,30,0.05)", minWidth: 620 }}>
 
               {/* Column headers */}
-              <div style={{ display: "grid", gridTemplateColumns: "140px 1fr 1fr" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "180px 1fr 1fr" }}>
                 {/* Empty corner */}
                 <div style={{ background: "#F7F6FB", borderBottom: `1px solid ${C.border}`, borderRight: `1px solid ${C.border}` }} />
                 {/* Coaching header */}
                 <div style={{ padding: "24px 32px", background: "#F7F6FB", borderBottom: `1px solid ${C.border}`, borderRight: `1px solid ${C.border}` }}>
-                  <p style={{ fontFamily: "Inter", fontSize: 10, fontWeight: 700, letterSpacing: "0.14em", textTransform: "uppercase", color: C.muted, margin: "0 0 6px" }}>Traditional</p>
-                  <p style={{ fontFamily: "Georgia, 'Times New Roman', serif", fontSize: 20, fontWeight: 400, color: C.body, margin: 0, letterSpacing: "-0.3px" }}>Coaching</p>
+                  <p style={{ fontFamily: "'DM Sans'", fontSize: 10, fontWeight: 700, letterSpacing: "0.14em", textTransform: "uppercase", color: C.muted, margin: "0 0 6px" }}>Traditional</p>
+                  <p style={{ fontFamily: "'DM Serif Display', Georgia, serif", fontSize: 20, fontWeight: 400, color: C.body, margin: 0, letterSpacing: "-0.3px" }}>Coaching</p>
                 </div>
-                {/* Second Act header */}
-                <div style={{ padding: "24px 32px", background: C.accentD, position: "relative", overflow: "hidden" }}>
-                  <div style={{ position: "absolute", top: "-30%", right: "-10%", width: 120, height: 120, borderRadius: "50%", background: "rgba(255,255,255,0.06)", pointerEvents: "none" }} />
-                  <p style={{ fontFamily: "Inter", fontSize: 10, fontWeight: 700, letterSpacing: "0.14em", textTransform: "uppercase", color: "rgba(255,255,255,0.45)", margin: "0 0 6px" }}>Your complement</p>
+                {/* Bril header */}
+                <div style={{ padding: "24px 32px", background: C.accentD, position: "relative", overflow: "hidden", borderRadius: "0 16px 0 0" }}>
+                  <div style={{ position: "absolute", top: "-30%", right: "-10%", width: 120, height: 120, borderRadius: "50%", background: "rgba(30,30,42,0.05)", pointerEvents: "none" }} />
+                  <p style={{ fontFamily: "'DM Sans'", fontSize: 10, fontWeight: 700, letterSpacing: "0.14em", textTransform: "uppercase", color: "#4A4A5C", margin: "0 0 6px" }}>Your brilliant alternative</p>
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <Logo size={16} />
-                    <p style={{ fontFamily: "Georgia, 'Times New Roman', serif", fontSize: 20, fontWeight: 400, color: "#fff", margin: 0, letterSpacing: "-0.3px" }}>Second Act</p>
+                    <Logo size={18} dark />
+                    <p style={{ fontFamily: "'DM Serif Display', Georgia, serif", fontSize: 20, fontWeight: 400, color: "#fff", margin: 0, letterSpacing: "-0.3px" }}>Be Brilliant</p>
                   </div>
                 </div>
               </div>
 
               {/* Rows */}
               {[
-                { label: "Cost",             coaching: "$200–$500 / session",                  secondact: "Free to start"                            },
-                { label: "Availability",     coaching: "Weekly 1-hour sessions",               secondact: "Every day, at your pace"                  },
-                { label: "Personalization",  coaching: "Depends on your coach",                secondact: "Proven frameworks, tailored to you"       },
-                { label: "Accountability",   coaching: "Between sessions, you're on your own", secondact: "Structured program keeps you on track"    },
-                { label: "Time to clarity",  coaching: "Weeks of exploration",                 secondact: "A clear plan in minutes"                  },
-                { label: "Thinking partner", coaching: "Your coach",          secondact: "Nora, available every day, remembers your context"              },
-                { label: "Habit formation",  coaching: "Not structured for it",                secondact: "Nora keeps you on track, research-backed, behaviorally designed"  },
-              ].map(({ label, coaching, secondact }, i) => {
+                { label: "Cost",             coaching: "$200–$500 / session 💸",                  bebril: "Free to start. Seriously."                            },
+                { label: "Availability",     coaching: "Weekly 1-hour sessions",               bebril: "24/7. Be Brilliant doesn't sleep."                  },
+                { label: "Personalization",  coaching: "Depends on your coach's mood",                bebril: "Tailored to your actual answers"       },
+                { label: "Accountability",   coaching: "Between sessions? You're on your own.", bebril: "Daily nudges. Lovingly persistent."    },
+                { label: "Time to clarity",  coaching: "Weeks of exploration",                 bebril: "A clear plan in ~3 minutes"                  },
+                { label: "Thinking partner", coaching: "Your coach (when scheduled)",          bebril: "Be Brilliant. Every day. Remembers everything."              },
+                { label: "Habit formation",  coaching: "Not really their thing",                bebril: "Research-backed, behaviourally designed, mildly addictive"  },
+              ].map(({ label, coaching, bebril }, i) => {
                 const isLast = i === 6;
                 return (
-                  <div key={i} style={{ display: "grid", gridTemplateColumns: "140px 1fr 1fr" }}>
+                  <div key={i} style={{ display: "grid", gridTemplateColumns: "180px 1fr 1fr" }}>
 
                     {/* Label cell */}
                     <div style={{
@@ -2548,7 +2554,7 @@ function LandingPage({ onStart, onResume, savedPlan }) {
                       borderRight: `1px solid ${C.border}`,
                       display: "flex", alignItems: "center",
                     }}>
-                      <p style={{ fontFamily: "Inter", fontSize: 11, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: C.ink, margin: 0 }}>{label}</p>
+                      <p style={{ fontFamily: "'DM Sans'", fontSize: 11, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: C.ink, margin: 0 }}>{label}</p>
                     </div>
 
                     {/* Coaching cell */}
@@ -2568,27 +2574,27 @@ function LandingPage({ onStart, onResume, savedPlan }) {
                           <path d="M2 2l4 4M6 2l-4 4" stroke={C.muted} strokeWidth="1.5" strokeLinecap="round"/>
                         </svg>
                       </span>
-                      <p style={{ fontFamily: "Inter", fontSize: 13, color: C.muted, fontWeight: 400, margin: 0, lineHeight: 1.5 }}>{coaching}</p>
+                      <p style={{ fontFamily: "'DM Sans'", fontSize: 13, color: C.muted, fontWeight: 400, margin: 0, lineHeight: 1.5 }}>{coaching}</p>
                     </div>
 
-                    {/* Second Act cell */}
+                    {/* Bril cell */}
                     <div style={{
                       padding: "20px 32px",
-                      background: "rgba(108,96,194,0.05)",
-                      borderBottom: isLast ? "none" : `1px solid rgba(184,175,236,0.4)`,
+                      background: "rgba(232,168,32,0.05)",
+                      borderBottom: isLast ? "none" : `1px solid rgba(232,168,32,0.12)`,
                       display: "flex", alignItems: "center", gap: 12,
                     }}>
                       <span style={{
                         width: 20, height: 20, borderRadius: "50%", flexShrink: 0,
                         background: C.accentD,
                         display: "flex", alignItems: "center", justifyContent: "center",
-                        boxShadow: "0 2px 8px rgba(108,96,194,0.35)",
+                        boxShadow: "0 2px 8px rgba(232,168,32,0.2)",
                       }}>
                         <svg width="9" height="7" viewBox="0 0 9 7" fill="none">
                           <path d="M1 3.5l2.5 2.5 4.5-5" stroke="#fff" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
                         </svg>
                       </span>
-                      <p style={{ fontFamily: "Inter", fontSize: 13, color: C.ink, fontWeight: 500, margin: 0, lineHeight: 1.5 }}>{secondact}</p>
+                      <p style={{ fontFamily: "'DM Sans'", fontSize: 13, color: C.ink, fontWeight: 500, margin: 0, lineHeight: 1.5 }}>{bebril}</p>
                     </div>
 
                   </div>
@@ -2606,52 +2612,52 @@ function LandingPage({ onStart, onResume, savedPlan }) {
           <FadeIn>
             <div style={{ textAlign: "center", marginBottom: 48 }}>
               <Label light>The daily experience</Label>
-              <h2 style={{ fontFamily: "Georgia, 'Times New Roman', serif", fontSize: "clamp(28px, 4vw, 42px)", fontWeight: 400, color: C.ink, letterSpacing: "-0.5px", lineHeight: 1.2 }}>
-                One task a day. Weekly goals.
+              <h2 style={{ fontFamily: "'DM Serif Display', Georgia, serif", fontSize: "clamp(28px, 4vw, 42px)", fontWeight: 400, color: C.ink, letterSpacing: "-0.5px", lineHeight: 1.2 }}>
+                One task. Every day. Shockingly effective.
               </h2>
-              <p style={{ fontFamily: "Inter", fontSize: 15, color: C.body, lineHeight: 1.8, fontWeight: 300, maxWidth: 480, margin: "16px auto 0" }}>
-                One task a day built around your role, goal, and working style. And Nora as your thinking partner to adapt your plan and keep you on track.
+              <p style={{ fontFamily: "'DM Sans'", fontSize: 15, color: C.body, lineHeight: 1.8, fontWeight: 400, maxWidth: 480, margin: "16px auto 0" }}>
+                For minds with range and calendars with concerns. Be Brilliant adapts your plan and keeps you honest — lovingly, of course.
               </p>
             </div>
           </FadeIn>
 
           {/* App frame */}
           <FadeIn delay={80}>
-            <div className="sa-dashboard-frame" style={{ borderRadius: 16, overflow: "hidden", boxShadow: "0 32px 80px rgba(15,14,30,0.14), 0 4px 16px rgba(15,14,30,0.06)", border: `1px solid ${C.border}` }}>
+            <div className="sa-dashboard-frame" style={{ borderRadius: 20, overflow: "hidden", boxShadow: "0 32px 80px rgba(232,168,32,0.08), 0 4px 16px rgba(232,168,32,0.05)", border: `1.5px solid ${C.border}` }}>
               {/* Browser chrome */}
-              <div style={{ background: "#F2F1F7", padding: "11px 16px", display: "flex", alignItems: "center", gap: 8, borderBottom: `1px solid ${C.border}` }}>
+              <div style={{ background: C.accentLL, padding: "11px 16px", display: "flex", alignItems: "center", gap: 8, borderBottom: `1px solid ${C.border}` }}>
                 <div style={{ display: "flex", gap: 6 }}>
-                  {["#FF5F57","#FFBD2E","#28C840"].map((c,i) => <div key={i} style={{ width: 11, height: 11, borderRadius: "50%", background: c }} />)}
+                  {["#F0D080","#C8F0D8","#E0D4F8"].map((c,i) => <div key={i} style={{ width: 11, height: 11, borderRadius: "50%", background: c }} />)}
                 </div>
-                <div style={{ flex: 1, background: "#fff", borderRadius: 6, padding: "4px 12px", marginLeft: 8, maxWidth: 280 }}>
-                  <span style={{ fontFamily: "Inter", fontSize: 11, color: C.muted }}>secondactapp.com · dashboard</span>
+                <div style={{ flex: 1, background: "#fff", borderRadius: 50, padding: "4px 12px", marginLeft: 8, maxWidth: 280 }}>
+                  <span style={{ fontFamily: "'DM Sans'", fontSize: 11, color: C.muted }}>bebril.ai/dashboard</span>
                 </div>
               </div>
 
-              {/* Dashboard header */}
-              <div style={{ background: `linear-gradient(155deg, ${C.bg0} 0%, ${C.bg1} 55%, ${C.bg2} 100%)`, padding: "22px 24px 20px", position: "relative", overflow: "hidden" }}>
-                <div style={{ position: "absolute", top: "-20%", right: "2%", width: 160, height: 160, borderRadius: "50%", background: "radial-gradient(circle, rgba(120,108,200,0.18) 0%, transparent 65%)", pointerEvents: "none" }} />
+              {/* Dashboard header - light pastel */}
+              <div style={{ background: `${C.offWhite}`, padding: "22px 24px 20px", position: "relative", overflow: "hidden" }}>
+                
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <Logo size={18} />
-                    <span style={{ fontFamily: "Inter", fontSize: 12, fontWeight: 700, color: "rgba(255,255,255,0.8)", letterSpacing: "-0.2px" }}>Second Act</span>
+                    <Logo size={22} />
+                    <span style={{ fontFamily: "'DM Sans'", fontSize: 13, fontWeight: 700, color: C.ink, letterSpacing: "-0.2px" }}>Be Brilliant</span>
                   </div>
-                  <span style={{ fontFamily: "Inter", fontSize: 10, fontWeight: 600, letterSpacing: "0.12em", textTransform: "uppercase", color: "rgba(255,255,255,0.28)" }}>Week 1</span>
+                  <span style={{ fontFamily: "'DM Sans'", fontSize: 10, fontWeight: 600, letterSpacing: "0.12em", textTransform: "uppercase", color: C.muted }}>Week 1</span>
                 </div>
-                <p style={{ fontFamily: "Inter", fontSize: 10, color: "rgba(255,255,255,0.35)", marginBottom: 4, fontWeight: 400, letterSpacing: "0.08em", textTransform: "uppercase" }}>The Primed · Week 1</p>
-                <p style={{ fontFamily: "Georgia, 'Times New Roman', serif", fontSize: 18, color: "#fff", fontWeight: 400, lineHeight: 1.2, letterSpacing: "-0.3px", marginBottom: 8 }}>Start moving on what matters</p>
-                <p style={{ fontFamily: "Inter", fontSize: 12, color: "rgba(255,255,255,0.38)", fontWeight: 300 }}>Day 1 is ready. Your plan starts here.</p>
+                <p style={{ fontFamily: "'DM Sans'", fontSize: 10, color: C.muted, marginBottom: 4, fontWeight: 400, letterSpacing: "0.08em", textTransform: "uppercase" }}>The Primed · Week 1</p>
+                <p style={{ fontFamily: "'DM Serif Display', Georgia, serif", fontSize: 18, color: C.ink, fontWeight: 400, lineHeight: 1.2, letterSpacing: "-0.3px", marginBottom: 8 }}>Start moving on what matters</p>
+                <p style={{ fontFamily: "'DM Sans'", fontSize: 12, color: C.muted, fontWeight: 400 }}>Day 1 is ready. Let's go. 🚀</p>
               </div>
 
               {/* Dashboard body */}
               <div style={{ background: "#fff", padding: "20px 22px" }}>
                 {/* Week strip */}
-                <p style={{ fontFamily: "Inter", fontSize: 10, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", color: C.accentD, marginBottom: 10 }}>This week</p>
+                <p style={{ fontFamily: "'DM Sans'", fontSize: 10, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", color: C.accentD, marginBottom: 10 }}>This week</p>
                 <div style={{ display: "flex", gap: 5, marginBottom: 18 }}>
                   {["M","T","W","T","F","S","S"].map((d, i) => (
                     <div key={i} style={{ flex: 1, textAlign: "center" }}>
-                      <p style={{ fontFamily: "Inter", fontSize: 9, color: i === 0 ? C.accentD : C.muted, marginBottom: 5, fontWeight: i === 0 ? 700 : 400 }}>{d}</p>
-                      <div style={{ height: 28, borderRadius: 7, background: i === 0 ? C.accentLL : "#F4F4F4", border: i === 0 ? `1.5px solid ${C.accentL}` : "1.5px solid transparent", display: "flex", alignItems: "center", justifyContent: "center", opacity: i > 0 ? 0.4 : 1 }}>
+                      <p style={{ fontFamily: "'DM Sans'", fontSize: 9, color: i === 0 ? C.accentD : C.muted, marginBottom: 5, fontWeight: i === 0 ? 700 : 400 }}>{d}</p>
+                      <div style={{ height: 28, borderRadius: 50, background: i === 0 ? C.accentLL : "#F4F2FA", border: i === 0 ? `1.5px solid ${C.accentL}` : "1.5px solid transparent", display: "flex", alignItems: "center", justifyContent: "center", opacity: i > 0 ? 0.4 : 1 }}>
                         {i === 0 && <div style={{ width: 5, height: 5, borderRadius: "50%", background: C.accentD }} />}
                       </div>
                     </div>
@@ -2659,28 +2665,28 @@ function LandingPage({ onStart, onResume, savedPlan }) {
                 </div>
 
                 {/* Task card */}
-                <div style={{ background: "#fff", border: `1px solid ${C.border}`, borderLeft: `4px solid ${C.accentD}`, borderRadius: 12, padding: "16px", marginBottom: 14, boxShadow: "0 1px 6px rgba(15,14,30,0.05)" }}>
+                <div style={{ background: "#fff", border: `1.5px solid ${C.border}`, borderLeft: `4px solid ${C.accentD}`, borderRadius: 14, padding: "16px", marginBottom: 14, boxShadow: "0 2px 10px rgba(232,168,32,0.05)" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
-                    <span style={{ fontFamily: "Inter", fontSize: 9, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", padding: "3px 8px", background: C.accentLL, color: C.accentD, borderRadius: 4 }}>Apply</span>
-                    <span style={{ fontFamily: "Inter", fontSize: 11, color: C.muted }}>10 min</span>
-                    <span style={{ fontFamily: "Inter", fontSize: 10, fontWeight: 600, color: C.accentD, marginLeft: "auto" }}>Day 1</span>
+                    <span style={{ fontFamily: "'DM Sans'", fontSize: 9, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", padding: "3px 10px", background: C.mint, color: "#2D7D5A", borderRadius: 50 }}>Apply</span>
+                    <span style={{ fontFamily: "'DM Sans'", fontSize: 11, color: C.muted }}>10 min</span>
+                    <span style={{ fontFamily: "'DM Sans'", fontSize: 10, fontWeight: 600, color: C.accentD, marginLeft: "auto" }}>Day 1</span>
                   </div>
-                  <p style={{ fontFamily: "Inter", fontSize: 13, fontWeight: 600, color: C.ink, marginBottom: 8, lineHeight: 1.35 }}>Write the one paragraph about your work you've been putting off</p>
-                  <p style={{ fontFamily: "Inter", fontSize: 12, color: C.body, marginBottom: 12, lineHeight: 1.65 }}>Generated from your answers. Specific to your role and situation.</p>
+                  <p style={{ fontFamily: "'DM Sans'", fontSize: 13, fontWeight: 600, color: C.ink, marginBottom: 8, lineHeight: 1.35 }}>Write the one paragraph about your work you've been putting off</p>
+                  <p style={{ fontFamily: "'DM Sans'", fontSize: 12, color: C.body, marginBottom: 12, lineHeight: 1.65 }}>Generated from your answers. Specific to your role and situation.</p>
                   {["Open a blank doc", "Write without editing for 5 minutes", "Send it to one person"].map((s, i) => (
                     <div key={i} style={{ display: "flex", gap: 8, alignItems: "flex-start", marginBottom: i < 2 ? 7 : 0 }}>
-                      <div style={{ width: 14, height: 14, borderRadius: 3, background: "#fff", border: `1.5px solid ${C.accentL}`, flexShrink: 0, marginTop: 2 }} />
-                      <p style={{ fontFamily: "Inter", fontSize: 11, color: C.body, lineHeight: 1.5 }}>{s}</p>
+                      <div style={{ width: 14, height: 14, borderRadius: 50, background: "#fff", border: `1.5px solid ${C.accentL}`, flexShrink: 0, marginTop: 2 }} />
+                      <p style={{ fontFamily: "'DM Sans'", fontSize: 11, color: C.body, lineHeight: 1.5 }}>{s}</p>
                     </div>
                   ))}
                 </div>
 
                 {/* Completion */}
-                <div style={{ background: C.offWhite, borderRadius: 10, padding: "14px 16px", border: `1px solid ${C.border}` }}>
-                  <p style={{ fontFamily: "Georgia, 'Times New Roman', serif", fontSize: 14, color: C.ink, marginBottom: 10 }}>Did you complete today's task?</p>
+                <div style={{ background: C.offWhite, borderRadius: 12, padding: "14px 16px", border: `1px solid ${C.border}` }}>
+                  <p style={{ fontFamily: "'DM Serif Display', Georgia, serif", fontSize: 14, color: C.ink, marginBottom: 10 }}>Did you do the thing?</p>
                   <div style={{ display: "flex", gap: 8 }}>
-                    <div style={{ flex: 1, background: C.ink, color: "#fff", borderRadius: 7, padding: "9px 0", fontFamily: "Inter", fontSize: 12, fontWeight: 600, textAlign: "center" }}>Yes, done ✓</div>
-                    <div style={{ flex: 1, background: "#fff", color: C.muted, border: `1px solid ${C.border}`, borderRadius: 7, padding: "9px 0", fontFamily: "Inter", fontSize: 12, textAlign: "center" }}>Not yet</div>
+                    <div style={{ flex: 1, background: C.accentD, color: "#fff", borderRadius: 50, padding: "9px 0", fontFamily: "'DM Sans'", fontSize: 12, fontWeight: 600, textAlign: "center" }}>Nailed it ✓</div>
+                    <div style={{ flex: 1, background: "#fff", color: C.muted, border: `1px solid ${C.border}`, borderRadius: 50, padding: "9px 0", fontFamily: "'DM Sans'", fontSize: 12, textAlign: "center" }}>Not yet</div>
                   </div>
                 </div>
               </div>
@@ -2691,25 +2697,29 @@ function LandingPage({ onStart, onResume, savedPlan }) {
 
       {/* ── FINAL CTA ───────────────────────────────────────── */}
       <section style={{
-        background: `linear-gradient(155deg, ${C.bg0} 0%, ${C.bg1} 55%, ${C.bg2} 100%)`,
+        background: C.accentLL,
         padding: "96px clamp(16px,5vw,40px)",
         textAlign: "center",
         position: "relative", overflow: "hidden",
       }}>
-        <div style={{ position: "absolute", top: "20%", left: "50%", transform: "translateX(-50%)", width: 600, height: 300, borderRadius: "50%", background: "radial-gradient(circle, rgba(120,108,200,0.12) 0%, transparent 65%)", pointerEvents: "none" }} />
+        <div style={{ position: "absolute", top: 30, right: "12%", width: 50, height: 50, borderRadius: 12, background: C.mint, pointerEvents: "none", opacity: 0.5, animation: "float1 6s ease-in-out infinite" }} />
+        <div style={{ position: "absolute", bottom: 40, left: "8%", width: 36, height: 36, borderRadius: "50%", background: C.lavender, pointerEvents: "none", opacity: 0.5, animation: "float2 7s ease-in-out infinite 1s" }} />
+        <div style={{ position: "absolute", top: "50%", left: "5%", width: 24, height: 24, borderRadius: 6, background: C.sky, pointerEvents: "none", opacity: 0.4, animation: "float3 5s ease-in-out infinite 2s" }} />
+        <div style={{ position: "absolute", top: "25%", right: "6%", width: 18, height: 18, borderRadius: "50%", background: C.peach, pointerEvents: "none", opacity: 0.5, animation: "sparkle 4s ease-in-out infinite 0.5s" }} />
         <div style={{ maxWidth: 560, margin: "0 auto", position: "relative", zIndex: 1 }}>
           <FadeIn>
-            <h2 style={{ fontFamily: "Georgia, 'Times New Roman', serif", fontSize: "clamp(28px, 5vw, 48px)", fontWeight: 400, color: C.textHero, lineHeight: 1.1, letterSpacing: "-1px", marginBottom: 20 }}>
-              Get clarity and structure.
+            <div style={{ fontSize: 48, marginBottom: 20, animation: "wiggle 2s ease-in-out infinite" }}>✦</div>
+            <h2 style={{ fontFamily: "'DM Serif Display', Georgia, serif", fontSize: "clamp(28px, 5vw, 48px)", fontWeight: 400, color: C.ink, lineHeight: 1.1, letterSpacing: "-1px", marginBottom: 20 }}>
+              Ready to be <span style={{ color: C.accentD, fontStyle: "italic" }}>brilliant</span>?
             </h2>
-            <p style={{ fontFamily: "Inter", fontSize: 15, color: "rgba(255,255,255,0.45)", fontWeight: 300, lineHeight: 1.75, marginBottom: 40, maxWidth: 400, margin: "0 auto 40px" }}>
-              Get a clear, personalized plan based on where you are, and Nora as your thinking partner to keep you accountable.
+            <p style={{ fontFamily: "'DM Sans'", fontSize: 16, color: C.body, fontWeight: 400, lineHeight: 1.75, marginBottom: 40, maxWidth: 420, margin: "0 auto 40px" }}>
+              Turns out it's mostly structure. Get a clear, personalized plan in minutes — worst case you learn something about yourself.
             </p>
             <button onClick={onStart} className="sa-btn-primary" style={{ fontSize: 16, padding: "16px 44px" }}>
-              Get my plan →
+              Get my plan (it's free) →
             </button>
-            <p style={{ fontFamily: "Inter", fontSize: 12, color: "rgba(255,255,255,0.25)", marginTop: 16, letterSpacing: "0.03em" }}>
-              Free · 12 questions · Your plan is ready in minutes
+            <p style={{ fontFamily: "'DM Sans'", fontSize: 13, color: C.muted, marginTop: 16 }}>
+              7 questions · 3 min · No signup required
             </p>
           </FadeIn>
         </div>
@@ -2719,11 +2729,11 @@ function LandingPage({ onStart, onResume, savedPlan }) {
       <footer style={{ background: C.offWhite, borderTop: `1px solid ${C.border}`, padding: "32px clamp(16px,5vw,40px)" }}>
         <div className="sa-footer-inner" style={{ maxWidth: 1080, margin: "0 auto", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 16 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
-            <Logo size={20} />
-            <span style={{ fontFamily: "Inter", fontSize: 14, fontWeight: 700, color: C.ink, letterSpacing: "-0.3px" }}>Second Act</span>
+            <Logo size={24} />
+            <span style={{ fontFamily: "'DM Sans'", fontSize: 15, fontWeight: 700, color: C.ink, letterSpacing: "-0.3px" }}>Be Brilliant</span>
           </div>
-          <span style={{ fontFamily: "Inter", fontSize: 12, color: C.muted, fontWeight: 300 }}>
-            Structure · Accountability · Free to start
+          <span style={{ fontFamily: "'DM Sans'", fontSize: 12, color: C.muted, fontWeight: 400 }}>
+            Turns out it's mostly structure ✦
           </span>
         </div>
       </footer>
@@ -2825,10 +2835,10 @@ function QuizScreen({ onComplete, onBack }) {
   };
 
   return (
-    <div style={{ minHeight: "100vh", background: "#fff" }}>
+    <div style={{ minHeight: "100vh", background: C.offWhite }}>
       {/* Progress bar */}
-      <div style={{ height: 3, background: T.border }}>
-        <div style={{ height: "100%", width: `${pct}%`, background: T.purple, transition: "width 0.4s ease" }} />
+      <div style={{ height: 4, background: T.border, borderRadius: 2 }}>
+        <div style={{ height: "100%", width: `${pct}%`, background: T.purple, transition: "width 0.4s ease", borderRadius: 2 }} />
       </div>
 
       <div style={{ maxWidth: 580, margin: "0 auto", padding: "32px 24px 100px" }}>
@@ -2837,17 +2847,22 @@ function QuizScreen({ onComplete, onBack }) {
           <button onClick={() => go(-1)} style={{ background: "none", border: "none", fontFamily: T.sans, fontSize: 14, color: T.muted, cursor: "pointer", padding: 0 }}>
             ← Back
           </button>
-          <div style={{ textAlign: "right" }}>
-            <span style={{ fontFamily: T.sans, fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", color: T.purple }}>{showingSubRole ? "1b" : current + 1} OF {questions.length}{hasSubRole && current === 1 && !showingSubRole ? "+1" : ""}</span>
-            <span style={{ fontFamily: T.sans, fontSize: 13, color: T.muted, marginLeft: 12 }}>{pct}% complete</span>
+          <div style={{ textAlign: "right", display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontFamily: T.sans, fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", color: T.purple }}>{showingSubRole ? "1b" : current + 1} of {questions.length}</span>
+            <span style={{ fontSize: 14 }}>{pct >= 80 ? "🔥" : pct >= 50 ? "✦" : pct >= 25 ? "→" : "·"}</span>
           </div>
         </div>
 
+        {/* Fun encouragement per question */}
+        {current === 0 && !showingSubRole && <p style={{ fontFamily: T.sans, fontSize: 12, color: T.muted, margin: "0 0 8px", fontWeight: 500 }}>Let's start easy.</p>}
+        {current === 3 && !showingSubRole && <p style={{ fontFamily: T.sans, fontSize: 12, color: T.muted, margin: "0 0 8px", fontWeight: 500 }}>This is the honest one. No wrong answer.</p>}
+        {current === 5 && !showingSubRole && <p style={{ fontFamily: T.sans, fontSize: 12, color: T.muted, margin: "0 0 8px", fontWeight: 500 }}>Almost there — this shapes everything.</p>}
+        {current === 6 && !showingSubRole && <p style={{ fontFamily: T.sans, fontSize: 12, color: T.muted, margin: "0 0 8px", fontWeight: 500 }}>Last one! Then the magic happens. ✦</p>}
 
         <div style={{ opacity: fade ? 1 : 0, transform: fade ? "translateY(0)" : "translateY(10px)", transition: "all 0.18s ease" }}>
           {/* Question */}
           <h2 style={{ fontFamily: T.serif, fontSize: "clamp(22px,4vw,27px)", fontWeight: 400, lineHeight: 1.45, color: T.black, margin: "0 0 10px", letterSpacing: -0.3 }}>{q.text}</h2>
-          {q.type === "multi" && <p style={{ fontFamily: T.sans, fontSize: 13, color: "#BBB", margin: "0 0 20px" }}>Select all that apply</p>}
+          {q.type === "multi" && <p style={{ fontFamily: T.sans, fontSize: 13, color: T.muted, margin: "0 0 20px" }}>Pick all that apply — be greedy.</p>}
           {q.type !== "multi" && <div style={{ marginBottom: 24 }} />}
 
           {/* TEXT INPUT, for name */}
@@ -2864,11 +2879,11 @@ function QuizScreen({ onComplete, onBack }) {
                   width: "100%", padding: "16px 20px",
                   border: `1.5px solid ${(answers[q.id] || "").trim() ? T.purple : T.border}`,
                   background: (answers[q.id] || "").trim() ? T.purpleL : "#fff",
-                  borderRadius: 0, fontFamily: T.serif, fontSize: 24,
+                  borderRadius: 14, fontFamily: T.serif, fontSize: 24,
                   color: T.black, outline: "none", boxSizing: "border-box", letterSpacing: -0.3,
                 }}
               />
-              <p style={{ fontFamily: T.sans, fontSize: 13, color: T.muted, margin: "10px 0 0" }}>Press Enter or tap Continue</p>
+              <p style={{ fontFamily: T.sans, fontSize: 13, color: T.muted, margin: "10px 0 0" }}>Hit Enter when you're ready</p>
             </div>
           )}
 
@@ -2889,7 +2904,7 @@ function QuizScreen({ onComplete, onBack }) {
                     width: "100%", padding: "16px 44px 16px 20px",
                     border: answers[q.id] !== undefined ? `1.5px solid ${T.purple}` : `1.5px solid ${T.border}`,
                     background: answers[q.id] !== undefined ? T.purpleL : "#fff",
-                    borderRadius: 0, fontFamily: T.sans, fontSize: 15,
+                    borderRadius: 14, fontFamily: T.sans, fontSize: 15,
                     color: answers[q.id] !== undefined ? T.purpleD : T.black,
                     cursor: "pointer", outline: "none", appearance: "none",
                     WebkitAppearance: "none", lineHeight: 1.4,
@@ -2929,7 +2944,7 @@ function QuizScreen({ onComplete, onBack }) {
                     style={{
                       width: "100%", padding: "16px 18px",
                       border: answers.goal_custom ? `1.5px solid ${T.purple}` : `1.5px solid ${T.border}`,
-                      borderRadius: 0, fontFamily: T.sans, fontSize: 15,
+                      borderRadius: 14, fontFamily: T.sans, fontSize: 15,
                       color: T.black, outline: "none",
                       background: answers.goal_custom ? T.purpleL : "#fff",
                       lineHeight: 1.5, boxSizing: "border-box",
@@ -3143,10 +3158,10 @@ function ResultsScreen({ plan, onRestart, onDashboard }) {
   useEffect(() => { setTimeout(() => setVisible(true), 100); }, []);
 
   const tagColors = {
-    "Apply":   { bg: "#F0F7F2", text: "#3A6B50", border: "#BDD9C8" },
-    "Reflect": { bg: "#F5EFEB", text: "#7A3D2E", border: "#C9A090" },
-    "Read":    { bg: "#EEF2FB", text: "#3B55A0", border: "#BACAE8" },
-    "Tool":    { bg: "#EDF7F6", text: "#1A6B62", border: "#9ACFC9" },
+    "Apply":   { bg: "#EEFBF3", text: "#2D7D5A", border: "#B8F0D8" },
+    "Reflect": { bg: "#FFF4EE", text: "#D06840", border: "#FFD8C4" },
+    "Read":    { bg: "#F0F8FF", text: "#4080C0", border: "#C0E0FF" },
+    "Tool":    { bg: "#F5F0FF", text: "#7B5EC2", border: "#D8C8F8" },
   };
 
   // Compute a simple exposure score (0–100) from taskAnalysis
@@ -3171,16 +3186,17 @@ function ResultsScreen({ plan, onRestart, onDashboard }) {
     : "#ECFDF5";
 
   return (
-    <div style={{ background: "#fff", opacity: visible ? 1 : 0, transition: "opacity 0.5s" }}>
+    <div style={{ background: C.offWhite, opacity: visible ? 1 : 0, transition: "opacity 0.5s" }}>
       <div style={{ maxWidth: 600, margin: "0 auto", padding: "clamp(24px, 5vw, 52px) clamp(16px, 4vw, 24px) 80px" }}>
 
         {/* ── PROFILE BADGE ── */}
-        <div style={{ textAlign: "center", marginBottom: 28 }}>
-          <div style={{ display: "inline-block", width: "100%", maxWidth: 400, padding: "26px 26px 22px", background: T.purpleL, border: `1.5px solid ${T.purpleMid}`, borderRadius: 14, boxShadow: T.shadow }}>
+        <div style={{ textAlign: "center", marginBottom: 28, animation: "pop 0.5s ease" }}>
+          <div style={{ display: "inline-block", width: "100%", maxWidth: 400, padding: "26px 26px 22px", background: T.purpleL, border: `1.5px solid ${T.purpleMid}`, borderRadius: 20, boxShadow: T.shadow, position: "relative", overflow: "hidden" }}>
+            <div style={{ position: "absolute", top: -8, right: 16, fontSize: 28, animation: "sparkle 3s ease-in-out infinite", pointerEvents: "none" }}>✦</div>
             {plan.name && (
               <p style={{ fontFamily: T.serif, fontSize: "clamp(26px, 4.5vw, 34px)", fontWeight: 400, color: T.black, margin: "0 0 4px", lineHeight: 1.15, letterSpacing: -0.3 }}>{plan.name.trim()}</p>
             )}
-            <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: 2.5, textTransform: "uppercase", color: T.purple, margin: 0 }}>your profile</p>
+            <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: 2.5, textTransform: "uppercase", color: T.purple, margin: 0 }}>your brilliant profile</p>
           </div>
         </div>
 
@@ -3191,7 +3207,7 @@ function ResultsScreen({ plan, onRestart, onDashboard }) {
           if (!bullets.length) return null;
           return (
             <div style={{ background: "#fff", border: `1px solid ${T.border}`, borderRadius: 14, padding: "22px 24px", marginBottom: 28, boxShadow: T.shadow }}>
-              <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", color: T.purple, margin: "0 0 16px" }}>What your answers tell us</p>
+              <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", color: T.purple, margin: "0 0 16px" }}>What we picked up on 👀</p>
               <ul style={{ margin: 0, padding: 0, listStyle: "none", display: "flex", flexDirection: "column", gap: 12 }}>
                 {bullets.map((b, i) => (
                   <li key={i} style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
@@ -3205,7 +3221,7 @@ function ResultsScreen({ plan, onRestart, onDashboard }) {
                 ))}
               </ul>
               <p style={{ fontFamily: T.sans, fontSize: 13, color: T.muted, margin: "18px 0 0", lineHeight: 1.5, fontStyle: "italic" }}>
-                Your program has been adapted accordingly.
+                We've tweaked everything to match. You'll see.
               </p>
             </div>
           );
@@ -3228,7 +3244,7 @@ function ResultsScreen({ plan, onRestart, onDashboard }) {
               </div>
               <div style={{ padding: "4px 20px 8px", display: "flex", flexDirection: "column" }}>
                 {[
-                  { label: "Week 1", text: arc.a1 },
+                  { label: "Week 1 ✦", text: arc.a1 },
                   { label: "Week 2", text: arc.a2 },
                   { label: "Week 3", text: arc.a3 },
                 ].map((w, i) => (
@@ -3245,19 +3261,19 @@ function ResultsScreen({ plan, onRestart, onDashboard }) {
         })()}
 
         {/* ── EMAIL CTA ── */}
-        <div style={{ background: T.grad, borderRadius: 12, padding: "32px 28px", textAlign: "center", marginBottom: 28 }}>
+        <div style={{ background: T.grad, borderRadius: 20, padding: "32px 28px", textAlign: "center", marginBottom: 28, border: `1.5px solid ${T.purpleMid}` }}>
           {!submitted ? (
             <>
-              <h2 style={{ fontFamily: T.serif, fontSize: "clamp(20px,3.5vw,26px)", fontWeight: 400, color: "#fff", margin: "0 0 10px", lineHeight: 1.25, letterSpacing: -0.3 }}>
-                {plan.name ? `${plan.name}, your Week 1 is ready.` : "Your Week 1 is ready."}
+              <h2 style={{ fontFamily: T.serif, fontSize: "clamp(20px,3.5vw,26px)", fontWeight: 400, color: T.black, margin: "0 0 10px", lineHeight: 1.25, letterSpacing: -0.3 }}>
+                {plan.name ? `${plan.name}, your Week 1 is ready 🎉` : "Your Week 1 is ready 🎉"}
               </h2>
-              <p style={{ fontFamily: T.sans, fontSize: 14, color: "rgba(255,255,255,0.55)", margin: "0 0 20px", lineHeight: 1.65 }}>
-                Built from your profile. Adapts as you go.
+              <p style={{ fontFamily: T.sans, fontSize: 14, color: T.body, margin: "0 0 20px", lineHeight: 1.65 }}>
+                Built from your answers. Gets smarter as you do.
               </p>
-              <div style={{ display: "flex", borderRadius: 8, overflow: "hidden", maxWidth: 400, margin: "0 auto 10px" }}>
+              <div style={{ display: "flex", borderRadius: 50, overflow: "hidden", maxWidth: 400, margin: "0 auto 10px", border: `1.5px solid ${T.border}` }}>
                 <input type="email" placeholder="Enter your email to get started" value={email} onChange={e => setEmail(e.target.value)}
                   onKeyDown={e => { if (e.key === "Enter" && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { setSubmitted(true); setTimeout(() => onDashboard && onDashboard(Date.now()), 400); } }}
-                  style={{ flex: 1, padding: "14px 16px", border: "none", fontFamily: T.sans, fontSize: 14, outline: "none", background: "#1E1E2E", color: "#fff", minWidth: 0 }} />
+                  style={{ flex: 1, padding: "14px 16px", border: "none", fontFamily: T.sans, fontSize: 14, outline: "none", background: "#fff", color: T.black, minWidth: 0 }} />
                 {(() => {
                   const valid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
                   return (
@@ -3265,22 +3281,22 @@ function ResultsScreen({ plan, onRestart, onDashboard }) {
                       disabled={!valid}
                       onClick={() => { if (valid) { setSubmitted(true); setTimeout(() => onDashboard && onDashboard(Date.now()), 400); } }}
                       style={{
-                        background: valid ? T.purple : "rgba(124,111,159,0.25)",
-                        color: valid ? "#fff" : "rgba(255,255,255,0.3)",
+                        background: valid ? T.purple : "rgba(232,168,32,0.15)",
+                        color: valid ? "#fff" : T.muted,
                         border: "none", fontFamily: T.sans, fontSize: 14, fontWeight: 600,
                         padding: "14px 20px", cursor: valid ? "pointer" : "not-allowed",
                         whiteSpace: "nowrap", transition: "all 0.2s",
                       }}>
-                      Start Week 1 →
+                      Let's go ✦
                     </button>
                   );
                 })()}
               </div>
-              <p style={{ fontFamily: T.sans, fontSize: 12, color: "rgba(255,255,255,0.3)", margin: 0 }}>Free · No card required</p>
+              <p style={{ fontFamily: T.sans, fontSize: 12, color: T.muted, margin: 0 }}>Free · No card · No catch</p>
             </>
           ) : (
             <div style={{ textAlign: "center", padding: "8px 0" }}>
-              <p style={{ fontFamily: T.serif, fontSize: 18, color: "#fff", margin: 0, fontWeight: 400 }}>Taking you to Week 1...</p>
+              <p style={{ fontFamily: T.serif, fontSize: 18, color: T.black, margin: 0, fontWeight: 400 }}>Brilliant. Let's do this. ✦</p>
             </div>
           )}
         </div>
@@ -3288,7 +3304,7 @@ function ResultsScreen({ plan, onRestart, onDashboard }) {
         {/* ── FOOTER ── */}
         <div style={{ textAlign: "center" }}>
           <button onClick={onRestart} style={{ background: "none", border: "none", fontFamily: T.sans, fontSize: 13, color: T.muted, cursor: "pointer", textDecoration: "underline" }}>
-            Retake the quiz
+            Start over ✦
           </button>
         </div>
 
@@ -3735,8 +3751,8 @@ function GeneratingScreen({ answers, auditTasks, onComplete, onBack }) {
   const [failed, setFailed] = useState(false);
   const hasAudit = (auditTasks || []).filter(t => t && t.trim().length > 3).length > 0;
   const phases = hasAudit
-    ? ["Reading your answers", "Analyzing your work tasks", "Building your personalized program"]
-    : ["Reading your answers", "Mapping your profile", "Building your personalized program"];
+    ? ["Reading your answers (no judgment)", "Analysing your work tasks (okay, a little judgment)", "Building something actually useful"]
+    : ["Reading your answers (no judgment)", "Figuring out your type (in a nice way)", "Building something actually useful"];
 
   // Use refs to track intervals so retry properly clears previous ones
   const intervalsRef = useRef({ di: null, pi: null });
@@ -3816,11 +3832,11 @@ function GeneratingScreen({ answers, auditTasks, onComplete, onBack }) {
     return (
       <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "#fff" }}>
         <div style={{ textAlign: "center", maxWidth: 440, padding: "0 32px" }}>
-          <p style={{ fontFamily: T.serif, fontSize: 20, fontWeight: 400, color: T.black, margin: "0 0 8px" }}>Something went wrong.</p>
-          <p style={{ fontFamily: T.sans, fontSize: 14, color: T.muted, margin: "0 0 28px", lineHeight: 1.6 }}>We could not build your plan. Check your connection and try again.</p>
+          <p style={{ fontFamily: T.serif, fontSize: 20, fontWeight: 400, color: T.black, margin: "0 0 8px" }}>Oops. Something broke. 🫠</p>
+          <p style={{ fontFamily: T.sans, fontSize: 14, color: T.muted, margin: "0 0 28px", lineHeight: 1.6 }}>Be Brilliant couldn't finish your plan. Check your connection and give it another go.</p>
           <div style={{ display: "flex", gap: 10, justifyContent: "center", marginBottom: 28 }}>
             <button onClick={() => { hasRetriedRef.current = false; setRetryCount(0); run(); }}
-              style={{ background: T.black, color: "#fff", border: "none", fontFamily: T.sans, fontSize: 14, fontWeight: 600, padding: "13px 28px", borderRadius: 10, cursor: "pointer" }}>
+              style={{ background: T.purple, color: "#fff", border: "none", fontFamily: T.sans, fontSize: 14, fontWeight: 600, padding: "13px 28px", borderRadius: 10, cursor: "pointer" }}>
               Try again
             </button>
             <button onClick={onBack}
@@ -3842,11 +3858,12 @@ function GeneratingScreen({ answers, auditTasks, onComplete, onBack }) {
   }
 
   return (
-    <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "#fff" }}>
+    <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: C.offWhite }}>
       <div style={{ textAlign: "center", maxWidth: 400, padding: "0 32px" }}>
-        <div style={{ width: 36, height: 36, borderRadius: "50%", border: `2.5px solid ${T.border}`, borderTopColor: T.purple, margin: "0 auto 32px", animation: "spin 0.8s linear infinite" }} />
+        <div style={{ fontSize: 40, margin: "0 auto 28px", animation: "wiggle 1.2s ease-in-out infinite" }}>✦</div>
         <style>{`@keyframes spin { to { transform: rotate(360deg); } } @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } } @keyframes firePulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.18); } } @keyframes pulse { 0%, 100% { opacity: 0.3; transform: scale(0.85); } 50% { opacity: 1; transform: scale(1); } }`}</style>
-        <p style={{ fontFamily: T.serif, fontSize: 20, fontWeight: 400, color: T.black, margin: "0 0 8px", letterSpacing: -0.2 }}>{phases[phase]}{dots}</p>
+        <p style={{ fontFamily: T.serif, fontSize: 22, fontWeight: 400, color: T.black, margin: "0 0 8px", letterSpacing: -0.2 }}>{phases[phase]}{dots}</p>
+        <p style={{ fontFamily: T.sans, fontSize: 13, color: T.muted, margin: "8px 0 0" }}>This usually takes about 10 seconds</p>
       </div>
     </div>
   );
@@ -3897,7 +3914,7 @@ What's making this feel urgent: ${lk(urgTexts, answers.urgency) || "not specifie
 Main blocker: ${( normalizeBlocker(answers.blocker).map(b => blockerTexts[b]).filter(Boolean).join("; ") || "something gets in the way")}
 
 ═══ GOAL CONTEXT ═══
-12-month goal: ${(answers.goal_custom || lk(goalTexts, answers.goal)) || "move forward"}${goalDetailText ? ` (specifically: ${goalDetailText})` : ""}${goalDirection ? `\nTarget direction: ${goalDirection}` : ""}${goalStatementText ? `\nNora-refined goal statement: "${goalStatementText}"` : ""}
+12-month goal: ${(answers.goal_custom || lk(goalTexts, answers.goal)) || "move forward"}${goalDetailText ? ` (specifically: ${goalDetailText})` : ""}${goalDirection ? `\nTarget direction: ${goalDirection}` : ""}${goalStatementText ? `\nBe Brilliant-refined goal statement: "${goalStatementText}"` : ""}
 
 ═══ THIS WEEK ═══
 Week 1 focus: "${week1Theme}"
@@ -3955,7 +3972,7 @@ Return ONLY valid JSON, no markdown:
 // ─── Week Batch Generator ────────────────────────────────────────────────────
 // Generates 7 tasks for a given week (e.g. Days 8-14 for Week 2).
 // Called when the previous week completes. Full history passed in.
-async function generateWeekBatch(plan, weekNum, startDay, dayTasks, dayStatus, dayNotes, noraInsight) {
+async function generateWeekBatch(plan, weekNum, startDay, dayTasks, dayStatus, dayNotes, brilInsight) {
   const answers = plan._answers || {};
   const cl = plan.classification || {};
 
@@ -3967,7 +3984,7 @@ async function generateWeekBatch(plan, weekNum, startDay, dayTasks, dayStatus, d
   const weekThemes = [arc.w1, arc.w2, arc.w3, arc.w4, arc.w5, arc.w6, arc.w7, arc.w8];
   const weekTheme = weekThemes[weekNum - 1] || "Keep building";
 
-  // Goal: use Nora-refined goal statement if available, otherwise quiz goal
+  // Goal: use Be Brilliant-refined goal statement if available, otherwise quiz goal
   const goalStatementText = plan._goalStatement || "";
   const rawGoalText = answers.goal_custom || lk(goalTexts, answers.goal) || "move forward";
   const effectiveGoal = goalStatementText || rawGoalText;
@@ -4034,7 +4051,7 @@ Main blockers: ${blockerText}
 
 ═══ THEIR GOAL ═══
 12-month goal: "${effectiveGoal}"${goalDetailText ? ` (specifically: ${goalDetailText})` : ""}${goalDirection ? `\nTarget direction: ${goalDirection}` : ""}
-${noraInsight ? `\n═══ NORA COACHING CONTEXT ═══\nNora (the person's AI coach) observed the following from recent conversations. Use this to shape tasks — it reflects what the person actually said, not just what they picked in a quiz. If Nora's observations suggest a different direction, skill focus, or priority than the original plan, FOLLOW NORA's insight — it's more current than the quiz:\n${noraInsight}\n` : ""}
+${brilInsight ? `\n═══ BE BRILLIANT COACHING CONTEXT ═══\nBe Brilliant (the person's AI thinking partner) observed the following from recent conversations. Use this to shape tasks — it reflects what the person actually said, not just what they picked in a quiz. If Bril's observations suggest a different direction, skill focus, or priority than the original plan, FOLLOW Be Brilliant's insight — it's more current than the quiz:\n${brilInsight}\n` : ""}
 ═══ ORIGINALLY PLANNED ARC ═══
 ${allThemes}
 
@@ -4043,9 +4060,9 @@ The originally planned theme for Week ${weekNum} is: "${weekTheme}"
 ═══ THEME ADAPTATION INSTRUCTIONS ═══
 Evaluate whether "${weekTheme}" is still the right focus for Week ${weekNum}. Consider:
 - Did last week's performance reveal something the original plan didn't anticipate?
-- Did the person's notes or Nora conversations surface a more pressing priority?
+- Did the person's notes or Be Brilliant conversations surface a more pressing priority?
 - Is the person ahead of schedule (could skip to a harder theme) or behind (needs a consolidation week)?
-- Has their goal shifted or become more specific through Nora conversations?
+- Has their goal shifted or become more specific through Be Brilliant conversations?
 
 If the original theme still fits, keep it. If something better serves the person right now, write a new 4-7 word theme that:
 - Connects to their 12-month goal
@@ -4121,7 +4138,7 @@ Return ONLY valid JSON, no markdown:
 // Called after each day completes. Generates Day N+1 task via API.
 // Key design: minimal explicit reflection (one optional sentence),
 // maximum backend adaptation (performance signal + note → AI prompt).
-async function generateNextDayTask(plan, dayNum, status, note, noraInsight, dayTasks, dayStatus, dayNotes) {
+async function generateNextDayTask(plan, dayNum, status, note, brilInsight, dayTasks, dayStatus, dayNotes) {
   const answers = plan._answers || {};
   const cl = plan.classification || {};
   const profileName = plan.profileName;
@@ -4218,11 +4235,11 @@ Main blocker: ${( normalizeBlocker(answers.blocker).map(b => blockerTexts[b]).fi
 Action vs. understanding: ${stylePref}
 
 ═══ GOAL CONTEXT ═══
-12-month goal: ${(answers.goal_custom || lk(goalTexts, answers.goal)) || "move forward on something that matters"}${goalDetailText ? ` (specifically: ${goalDetailText})` : ""}${goalDirection ? `\nTarget direction: ${goalDirection}` : ""}${goalStatementText ? `\nNora-refined goal statement: "${goalStatementText}"` : ""}
+12-month goal: ${(answers.goal_custom || lk(goalTexts, answers.goal)) || "move forward on something that matters"}${goalDetailText ? ` (specifically: ${goalDetailText})` : ""}${goalDirection ? `\nTarget direction: ${goalDirection}` : ""}${goalStatementText ? `\nBe Brilliant-refined goal statement: "${goalStatementText}"` : ""}
 
 ═══ THIS WEEK ═══
 Week ${thisWeekNum} focus: "${thisWeekTheme}"
-${noraInsight ? `\n═══ NORA COACHING INSIGHTS ═══\nIf Nora adjusted the goal or identified a priority shift, follow that direction — it's more current than the quiz.\n${noraInsight}\n` : ""}
+${brilInsight ? `\n═══ BE BRILLIANT COACHING INSIGHTS ═══\nIf Be Brilliant adjusted the goal or identified a priority shift, follow that direction — it's more current than the quiz.\n${brilInsight}\n` : ""}
 ═══ WEEK HISTORY ═══
 ${dayHistory || "No previous days yet."}
 
@@ -4293,10 +4310,10 @@ function TaskSteps({ steps, onCheckedChange, initialChecked, tagBg, tagAccent })
   );
 }
 
-// ─── Nora Chat Modal ──────────────────────────────────────
+// ─── Bril Chat Modal ──────────────────────────────────────
 // Conversational AI that knows the user's full profile and
 // extracts insights to feed forward into task generation.
-function NoraChatModal({ plan, onClose, onInsight, dayTasks, dayStatus, dayNotes, currentWeekTheme, weekGoalOverride, weekFocusInput, goalStatement, momentumScore, momentumLabel, noraSessionLog, currentDay, isGoalClarification }) {
+function BrilChatModal({ plan, onClose, onInsight, dayTasks, dayStatus, dayNotes, currentWeekTheme, weekGoalOverride, weekFocusInput, goalStatement, momentumScore, momentumLabel, brilSessionLog, currentDay, isGoalClarification }) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -4321,7 +4338,7 @@ function NoraChatModal({ plan, onClose, onInsight, dayTasks, dayStatus, dayNotes
     return [...notes, ...wkGoals];
   })();
 
-  const systemPrompt = `You are Nora, a thoughtful and warm career thinking partner inside Second Act. You genuinely care about this person's progress. You remember what they've said before and gently bring it up when it matters, not to catch them out, but because you're paying attention and you want to help them stay honest with themselves.
+  const systemPrompt = `You are Be Brilliant, a sharp and warm career thinking partner. You go by "Be Brilliant" or just "Brilliant". You're warm, a little tongue-in-cheek, and genuinely care about this person's progress. You remember what they've said before and gently bring it up when it matters — not to catch them out, but because you're paying attention. You can be playful but never flippant about their career. Think "supportive friend who also happens to be annoyingly good at strategy."
 
 ═══ WHO THIS PERSON IS (from their quiz) ═══
 - First name: ${(answers.name || "").trim() || "not given"}
@@ -4382,9 +4399,9 @@ ${(() => {
 - Readiness: ${cl.readinessLevel || "medium"}
 - Frustrated pattern: ${cl.isFrustrated ? "yes, they've tried things before and nothing stuck" : "no"}
 - Theory-practice gap: ${cl.hasTheoryGap ? "yes, they learn but don't apply" : "no"}
-${noraSessionLog?.length ? `
+${brilSessionLog?.length ? `
 ═══ PAST CONVERSATIONS WITH THEM ═══
-${noraSessionLog.map((s, i) => `Session ${i + 1} (Day ${s.dayNum}): ${s.summary}${s.changes?.length ? ` Changes made: ${s.changes.join(", ")}.` : ""}`).join("\n")}
+${brilSessionLog.map((s, i) => `Session ${i + 1} (Day ${s.dayNum}): ${s.summary}${s.changes?.length ? ` Changes made: ${s.changes.join(", ")}.` : ""}`).join("\n")}
 
 This is your memory. Use it naturally and with kindness:
 - If they said they'd do something last session, check in warmly: "You mentioned wanting to [X] last time. How did that go?"
@@ -4458,7 +4475,7 @@ ${isGoalClarification
   ? "They want to move into a different field or start something of their own but haven't said where. Open with a warm, curious question asking what direction they're considering."
   : "Open with a single specific question that shows you've been paying attention. Good openers: reference something they wrote in a day note, gently ask about a skipped task, check whether their weekly focus still feels right, or ask what's on their mind today. Don't open with a generic 'how are things going'."}`;
 
-  // Kick off with Nora's opening question
+  // Kick off with Bril's opening question
   useEffect(() => {
     const controller = new AbortController();
     const open = async () => {
@@ -4575,23 +4592,23 @@ ${isGoalClarification
 
       if (isDone) setDone(true);
     } catch (e) {
-      setMessages(prev => [...prev, { role: "assistant", content: "Something went wrong  - try again." }]);
+      setMessages(prev => [...prev, { role: "assistant", content: "Hmm, that didn't work. Mind trying again?" }]);
     }
     setLoading(false);
   };
 
   return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", zIndex: 100, display: "flex", alignItems: "flex-end", justifyContent: "center" }} onClick={e => e.target === e.currentTarget && onClose()}>
+    <div style={{ position: "fixed", inset: 0, background: "rgba(45,42,62,0.45)", zIndex: 100, display: "flex", alignItems: "flex-end", justifyContent: "center" }} onClick={e => e.target === e.currentTarget && onClose()}>
       <div style={{ width: "100%", maxWidth: 580, background: "#fff", borderRadius: "20px 20px 0 0", maxHeight: "90vh", display: "flex", flexDirection: "column", overflow: "hidden" }}>
 
         {/* Header */}
         <div style={{ padding: "18px 20px 14px", borderBottom: `1px solid ${T.border}`, display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
             <div style={{ width: 36, height: 36, borderRadius: "50%", background: T.grad, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-              <span style={{ fontFamily: T.serif, fontSize: 14, fontWeight: 400, color: "#fff", fontStyle: "italic" }}>N</span>
+              <span style={{ fontFamily: T.serif, fontSize: 14, fontWeight: 400, color: "#8B6914", fontStyle: "italic" }}>B</span>
             </div>
             <div>
-              <p style={{ fontFamily: T.sans, fontSize: 14, fontWeight: 600, color: T.black, margin: 0 }}>Nora</p>
+              <p style={{ fontFamily: T.sans, fontSize: 14, fontWeight: 600, color: T.black, margin: 0 }}>Be Brilliant</p>
             </div>
           </div>
           <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 20, color: T.muted, cursor: "pointer", padding: "4px 8px", lineHeight: 1 }}>×</button>
@@ -4633,7 +4650,7 @@ ${isGoalClarification
               That's the conversation for now. Your plan has been updated where needed.
             </p>
             <button onClick={onClose}
-              style={{ background: T.black, color: "#fff", border: "none", borderRadius: 8, padding: "10px 24px", fontFamily: T.sans, fontSize: 14, fontWeight: 600, cursor: "pointer" }}>
+              style={{ background: T.purple, color: "#fff", border: "none", borderRadius: 8, padding: "10px 24px", fontFamily: T.sans, fontSize: 14, fontWeight: 600, cursor: "pointer" }}>
               Back to my plan →
             </button>
           </div>
@@ -4644,7 +4661,7 @@ ${isGoalClarification
                 value={input}
                 onChange={e => setInput(e.target.value)}
                 onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
-                placeholder="Ask Nora anything, task, goal, pace..."
+                placeholder="What's on your mind? Be Brilliant is all ears..."
                 rows={2}
                 style={{ flex: 1, padding: "10px 14px", border: `1px solid ${T.border}`, borderRadius: 10, fontFamily: T.sans, fontSize: 14, color: T.black, lineHeight: 1.55, outline: "none", resize: "none", boxSizing: "border-box", background: "#fff" }}
               />
@@ -4653,7 +4670,7 @@ ${isGoalClarification
                 Send
               </button>
             </div>
-            <p style={{ fontFamily: T.sans, fontSize: 11, color: T.muted, margin: "8px 0 0" }}>Ask Nora to brainstorm with you, change tomorrow's task, adjust your weekly focus, or shift your goal</p>
+            <p style={{ fontFamily: T.sans, fontSize: 11, color: T.muted, margin: "8px 0 0" }}>Brainstorm, vent, change direction, tweak tomorrow's task — Be Brilliant is here for all of it</p>
             {messages.filter(m => m.role === "user").length >= 25 && (
               <p style={{ fontFamily: T.sans, fontSize: 10, color: T.muted, margin: "4px 0 0", opacity: 0.5 }}>
                 {MAX_EXCHANGES - messages.filter(m => m.role === "user").length} exchange{MAX_EXCHANGES - messages.filter(m => m.role === "user").length === 1 ? "" : "s"} left in this conversation
@@ -4735,7 +4752,7 @@ Return ONLY the statement, nothing else.`;
 
 // ─── Weekly Check-In Modal ────────────────────────────────────────────────────
 // Triggered automatically after completing the last day of each week.
-// Nora reviews what landed, what shifted, and whether the goal is still right.
+// Bril reviews what landed, what shifted, and whether the goal is still right.
 // The conversation output feeds directly into the next week's batch generation.
 function WeeklyCheckInModal({ plan, completedWeek, weekTasks, weekNotes, weekStatus, onComplete, onSkip }) {
   const [messages, setMessages] = useState([]);
@@ -4777,7 +4794,7 @@ function WeeklyCheckInModal({ plan, completedWeek, weekTasks, weekNotes, weekSta
 
   const doneCount = Array.from({ length: 7 }, (_, i) => (completedWeek - 1) * 7 + i + 1).filter(d => (weekStatus || {})[d] === 'done').length;
 
-  const systemPrompt = `You are Nora, a sharp career coach inside Second Act. You are doing a brief weekly check-in with someone who just finished Week ${completedWeek} of their career development program.
+  const systemPrompt = `You are Be Brilliant, a sharp and warm career coach with a hint of loving sarcasm. You are doing a brief weekly check-in with someone who just finished Week ${completedWeek} of their career development program.
 
 ═══ WHO THIS PERSON IS ═══
 Profile: ${plan.profileName}
@@ -4789,7 +4806,7 @@ What's making this feel urgent: ${URG_TEXTS[answers.urgency] || "not specified"}
 Main blockers: ${normalizeBlocker(answers.blocker).map(b => BLOCKER_TEXTS[b]).filter(Boolean).join("; ") || "not specified"}
 
 ═══ THEIR GOAL ═══
-12-month goal: "${goalText}"${goalDetailText ? ` (specifically: ${goalDetailText})` : ""}${goalDirection ? `\nTarget direction: ${goalDirection}` : ""}${goalStatementText ? `\nNora-refined goal statement: "${goalStatementText}"` : ""}
+12-month goal: "${goalText}"${goalDetailText ? ` (specifically: ${goalDetailText})` : ""}${goalDirection ? `\nTarget direction: ${goalDirection}` : ""}${goalStatementText ? `\nBe Brilliant-refined goal statement: "${goalStatementText}"` : ""}
 
 ═══ WEEK ${completedWeek} ═══
 Theme: "${thisWeekTheme}"
@@ -4875,7 +4892,7 @@ START: Open with one specific, direct question based on what you see in their we
         onComplete && onComplete(cleanText, cmds);
       }
     } catch {
-      setMessages(prev => [...prev, { role: "assistant", content: "Something went wrong, try again." }]);
+      setMessages(prev => [...prev, { role: "assistant", content: "Be Brilliant had a brain freeze. Try once more?" }]);
     }
     setLoading(false);
   };
@@ -4887,15 +4904,15 @@ START: Open with one specific, direct question based on what you see in their we
         {/* Header */}
         <div style={{ padding: "18px 20px 14px", background: T.grad, borderRadius: "20px 20px 0 0", display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-            <div style={{ width: 36, height: 36, borderRadius: "50%", background: "rgba(255,255,255,0.12)", border: "1px solid rgba(255,255,255,0.2)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-              <span style={{ fontFamily: T.serif, fontSize: 14, fontWeight: 400, color: "#fff", fontStyle: "italic" }}>N</span>
+            <div style={{ width: 36, height: 36, borderRadius: "50%", background: "rgba(139,105,20,0.12)", border: "1px solid rgba(139,105,20,0.25)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+              <span style={{ fontFamily: T.serif, fontSize: 14, fontWeight: 400, color: "#8B6914", fontStyle: "italic" }}>B</span>
             </div>
             <div>
-              <p style={{ fontFamily: T.sans, fontSize: 14, fontWeight: 600, color: "#fff", margin: 0 }}>Week {completedWeek} check-in</p>
-              <p style={{ fontFamily: T.sans, fontSize: 11, color: "rgba(255,255,255,0.5)", margin: 0 }}>Nora · shapes your Week {completedWeek + 1} tasks</p>
+              <p style={{ fontFamily: T.sans, fontSize: 14, fontWeight: 600, color: T.black, margin: 0 }}>Week {completedWeek} check-in</p>
+              <p style={{ fontFamily: T.sans, fontSize: 11, color: "#5C5C6E", margin: 0 }}>Be Brilliant · shapes your Week {completedWeek + 1} tasks</p>
             </div>
           </div>
-          <button onClick={onSkip} style={{ background: "none", border: "none", fontSize: 13, color: "rgba(255,255,255,0.4)", cursor: "pointer", padding: "4px 8px", fontFamily: T.sans }}>Skip →</button>
+          <button onClick={onSkip} style={{ background: "none", border: "none", fontSize: 13, color: "#5C5C6E", cursor: "pointer", padding: "4px 8px", fontFamily: T.sans }}>Skip →</button>
         </div>
 
         {/* Messages */}
@@ -4929,7 +4946,7 @@ START: Open with one specific, direct question based on what you see in their we
           <div style={{ padding: "12px 16px 24px", borderTop: `1px solid ${T.border}`, flexShrink: 0 }}>
             <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
               <textarea value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
-                placeholder="Reply to Nora..."
+                placeholder="Type your reply..."
                 rows={2}
                 style={{ flex: 1, padding: "10px 14px", border: `1px solid ${T.border}`, borderRadius: 10, fontFamily: T.sans, fontSize: 14, color: T.black, lineHeight: 1.55, outline: "none", resize: "none", boxSizing: "border-box", background: "#fff" }}
               />
@@ -4954,7 +4971,7 @@ const MomentumArc = React.memo(function MomentumArc({ momentumScore, momentumLab
     const t = setTimeout(() => setDisplayScore(momentumScore), 300);
     return () => clearTimeout(t);
   }, [momentumScore]);
-  const arcColor = displayScore >= 80 ? "#5DCAA5" : displayScore >= 60 ? "#A78BFA" : displayScore >= 40 ? "#818CF8" : "rgba(255,255,255,0.4)";
+  const arcColor = displayScore >= 80 ? "#5DCAA5" : displayScore >= 60 ? "#A78BFA" : displayScore >= 40 ? "#818CF8" : "rgba(30,30,42,0.15)";
   return (
     <div style={{ position: "relative", width: 80, height: 80, flexShrink: 0 }}>
       <svg width="80" height="80" viewBox="0 0 80 80" style={{ transform: "rotate(-90deg)" }}>
@@ -4964,8 +4981,8 @@ const MomentumArc = React.memo(function MomentumArc({ momentumScore, momentumLab
           style={{ transition: "stroke-dasharray 0.7s cubic-bezier(0.4,0,0.2,1), stroke 0.5s ease" }} />
       </svg>
       <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
-        <span style={{ fontFamily: T.sans, fontSize: 18, fontWeight: 700, color: "#fff", lineHeight: 1 }}>{momentumScore}</span>
-        <span style={{ fontFamily: T.sans, fontSize: 9, color: "rgba(255,255,255,0.45)", textTransform: "uppercase", letterSpacing: 0.8, marginTop: 2 }}>{momentumLabel}</span>
+        <span style={{ fontFamily: T.sans, fontSize: 18, fontWeight: 700, color: T.black, lineHeight: 1 }}>{momentumScore}</span>
+        <span style={{ fontFamily: T.sans, fontSize: 9, color: "#5C5C6E", textTransform: "uppercase", letterSpacing: 0.8, marginTop: 2 }}>{momentumLabel}</span>
       </div>
     </div>
   );
@@ -5079,7 +5096,7 @@ function MailShareButton({ task }) {
         <div style={{
           position: "absolute", bottom: "calc(100% + 6px)", left: "50%",
           transform: "translateX(-50%)",
-          background: T.black, color: "#fff",
+          background: T.purple, color: "#fff",
           fontFamily: T.sans, fontSize: 11, fontWeight: 500,
           padding: "5px 10px", borderRadius: 6, whiteSpace: "nowrap",
           pointerEvents: "none", zIndex: 10,
@@ -5132,16 +5149,16 @@ function DashboardScreen({ plan: initialPlan, onBack, startDate }) {
   const [goalStatement, setGoalStatement] = useState("");
   const [arcOpen, setArcOpen] = useState(false);
   const [checkedSteps, setCheckedSteps] = useState({});
-  // Nora modal
-  const [noraOpen, setNoraOpen] = useState(false);
-  const [noraInsight, setNoraInsight] = useState(null);
-  const [noraDismissed, setNoraDismissed] = useState(false);
+  // Bril modal
+  const [brilOpen, setBrilOpen] = useState(false);
+  const [brilInsight, setBrilInsight] = useState(null);
+  const [brilDismissed, setBrilDismissed] = useState(false);
   const [nudgeDismissed, setNudgeDismissed] = useState(false);
-  const [noraGoalClarification, setNoraGoalClarification] = useState(false); // first-session goal mode
-  const [noraMomentumBonus, setNoraMomentumBonus] = useState(0);
-  const [noraChangeMade, setNoraChangeMade] = useState(false);
-  const [noraPickDay, setNoraPickDay] = useState(null);
-  const [noraSessionLog, setNoraSessionLog] = useState([]);
+  const [brilGoalClarification, setBrilGoalClarification] = useState(false); // first-session goal mode
+  const [brilMomentumBonus, setBrilMomentumBonus] = useState(0);
+  const [brilChangeMade, setBrilChangeMade] = useState(false);
+  const [brilPickDay, setBrilPickDay] = useState(null);
+  const [brilSessionLog, setBrilSessionLog] = useState([]);
   const [weekGenerating, setWeekGenerating] = useState(false);
   // Weekly check-in state
   const [weeklyCheckInOpen, setWeeklyCheckInOpen] = useState(null);
@@ -5181,12 +5198,12 @@ function DashboardScreen({ plan: initialPlan, onBack, startDate }) {
         if (saved.adaptedWeekThemes) setAdaptedWeekThemes(saved.adaptedWeekThemes);
         if (saved.goalStatement) setGoalStatement(saved.goalStatement);
         if (saved.checkedSteps) setCheckedSteps(saved.checkedSteps);
-        if (saved.noraInsight) setNoraInsight(saved.noraInsight);
-        if (saved.noraDismissed) setNoraDismissed(saved.noraDismissed);
-        if (saved.noraMomentumBonus) setNoraMomentumBonus(saved.noraMomentumBonus);
-        if (saved.noraChangeMade) setNoraChangeMade(saved.noraChangeMade);
-        if (saved.noraPickDay) setNoraPickDay(saved.noraPickDay);
-        if (saved.noraSessionLog?.length) setNoraSessionLog(saved.noraSessionLog);
+        if (saved.brilInsight) setBrilInsight(saved.brilInsight);
+        if (saved.brilDismissed) setBrilDismissed(saved.brilDismissed);
+        if (saved.brilMomentumBonus) setBrilMomentumBonus(saved.brilMomentumBonus);
+        if (saved.brilChangeMade) setBrilChangeMade(saved.brilChangeMade);
+        if (saved.brilPickDay) setBrilPickDay(saved.brilPickDay);
+        if (saved.brilSessionLog?.length) setBrilSessionLog(saved.brilSessionLog);
         if (saved.weeklyCheckInDone) setWeeklyCheckInDone(saved.weeklyCheckInDone);
         if (saved.weekFocusInput) setWeekFocusInput(saved.weekFocusInput);
         if (saved.customGoalInput) setCustomGoalInput(saved.customGoalInput);
@@ -5211,8 +5228,8 @@ function DashboardScreen({ plan: initialPlan, onBack, startDate }) {
       Store.set(storageKey, {
         activeDay, dayTasks, dayStatus, dayNotes,
         goalUpdatedDay, paceSlow, weekGoalOverride, adaptedWeekThemes, goalStatement,
-        checkedSteps, noraInsight, noraDismissed, noraMomentumBonus,
-        noraChangeMade, noraPickDay, noraSessionLog,
+        checkedSteps, brilInsight, brilDismissed, brilMomentumBonus,
+        brilChangeMade, brilPickDay, brilSessionLog,
         weeklyCheckInDone, weekFocusInput, customGoalInput, cashPot,
         paywallBypassed,
       });
@@ -5235,16 +5252,16 @@ function DashboardScreen({ plan: initialPlan, onBack, startDate }) {
     storageLoaded,
     activeDay, dayTasks, dayStatus, dayNotes,
     goalUpdatedDay, paceSlow, weekGoalOverride, adaptedWeekThemes, goalStatement,
-    checkedSteps, noraInsight, noraDismissed, noraMomentumBonus,
-    noraChangeMade, noraPickDay, noraSessionLog,
+    checkedSteps, brilInsight, brilDismissed, brilMomentumBonus,
+    brilChangeMade, brilPickDay, brilSessionLog,
     weeklyCheckInDone, weekFocusInput, customGoalInput, cashPot, paywallBypassed,
   ]); // eslint-disable-line
 
   const tagColors = {
-    "Apply":   { bg: "#F0F7F2", text: "#3A6B50", border: "#BDD9C8" },
-    "Reflect": { bg: "#F5EFEB", text: "#7A3D2E", border: "#C9A090" },
-    "Read":    { bg: "#EEF2FB", text: "#3B55A0", border: "#BACAE8" },
-    "Tool":    { bg: "#EDF7F6", text: "#1A6B62", border: "#9ACFC9" },
+    "Apply":   { bg: "#EEFBF3", text: "#2D7D5A", border: "#B8F0D8" },
+    "Reflect": { bg: "#FFF4EE", text: "#D06840", border: "#FFD8C4" },
+    "Read":    { bg: "#F0F8FF", text: "#4080C0", border: "#C0E0FF" },
+    "Tool":    { bg: "#F5F0FF", text: "#7B5EC2", border: "#D8C8F8" },
   };
 
   // Generate Days 2-7 on dashboard mount, skip if already in storage
@@ -5277,7 +5294,7 @@ function DashboardScreen({ plan: initialPlan, onBack, startDate }) {
     if ((!day1 || day1.tag === 'Tool') && !day1GenAttempted.current) {
       day1GenAttempted.current = true;
       setGenerating(1);
-      generateNextDayTask(plan, 0, null, "", noraInsight, {}, {}, {})
+      generateNextDayTask(plan, 0, null, "", brilInsight, {}, {}, {})
         .then(t => {
           if (t) {
             setDayTasks(prev => ({ ...prev, 1: t }));
@@ -5357,14 +5374,14 @@ function DashboardScreen({ plan: initialPlan, onBack, startDate }) {
   const streakCount = calcStreak(dayStatus);
 
   // ── MOMENTUM SCORE (0–100) ──────────────────────────────
-  // +8 per completed day, -3 per skipped day, +noraMomentumBonus, streak multiplier
+  // +8 per completed day, -3 per skipped day, +brilMomentumBonus, streak multiplier
   const momentumScore = useMemo(() => {
     const dc = Object.values(dayStatus).filter(s => s === 'done').length;
     const sc = Object.values(dayStatus).filter(s => s === 'skipped').length;
     const base = dc * 8 - sc * 3;
     const streakBonus = streakCount >= 21 ? 12 : streakCount >= 14 ? 8 : streakCount >= 7 ? 4 : streakCount >= 3 ? 2 : 0;
-    return Math.max(0, Math.min(100, base + streakBonus + noraMomentumBonus));
-  }, [dayStatus, streakCount, noraMomentumBonus]);
+    return Math.max(0, Math.min(100, base + streakBonus + brilMomentumBonus));
+  }, [dayStatus, streakCount, brilMomentumBonus]);
 
   const momentumLabel = momentumScore >= 80 ? "Peak" : momentumScore >= 60 ? "Strong" : momentumScore >= 40 ? "Building" : momentumScore >= 20 ? "Starting" : "Day 1";
 
@@ -5397,7 +5414,7 @@ function DashboardScreen({ plan: initialPlan, onBack, startDate }) {
   const markDay = async (dayNum, status) => {
     const note = dayNotes[dayNum] || "";
     // Capture which achievements were already earned before this action
-    const ctx0 = { dayStatus, dayTasks, streakCount, noraChangeMade, noraPickDay };
+    const ctx0 = { dayStatus, dayTasks, streakCount, brilChangeMade, brilPickDay };
     const prevEarned = new Set(ACHIEVEMENTS.filter(a => a.earned(ctx0)).map(a => a.id));
 
     // Update status
@@ -5406,7 +5423,7 @@ function DashboardScreen({ plan: initialPlan, onBack, startDate }) {
 
     // Check for newly unlocked achievements with the updated status
     const newStreakCount = calcStreak(newStatus);
-    const ctx1 = { dayStatus: newStatus, dayTasks, streakCount: newStreakCount, noraChangeMade, noraPickDay };
+    const ctx1 = { dayStatus: newStatus, dayTasks, streakCount: newStreakCount, brilChangeMade, brilPickDay };
     const newlyEarned = ACHIEVEMENTS.filter(a => !prevEarned.has(a.id) && a.earned(ctx1));
     if (newlyEarned.length > 0) {
       newlyEarned.forEach((a, i) => {
@@ -5461,11 +5478,11 @@ function DashboardScreen({ plan: initialPlan, onBack, startDate }) {
           const totalSteps = (dayTasks[dayNum]?.steps || []).length;
           const stepsSignal = totalSteps > 0 ? `Completed ${checkedCount} of ${totalSteps} steps.` : "";
           const paceNote = paceSlow ? "Person requested slower pace, keep this task shorter and lower-friction." : "";
-          const sessionLogNote = noraSessionLog.length
-            ? `Nora session history: ${noraSessionLog.slice(-3).map(s => s.summary).join(" | ")}`
+          const sessionLogNote = brilSessionLog.length
+            ? `Bril session history: ${brilSessionLog.slice(-3).map(s => s.summary).join(" | ")}`
             : "";
-          const combinedNote = [note, stepsSignal, editSignal, paceNote, noraInsight ? `Nora coaching context: ${noraInsight.slice(0, 300)}` : "", sessionLogNote].filter(Boolean).join(" | ");
-          const nextTask = await generateNextDayTask(plan, dayNum, status, combinedNote, noraInsight, dayTasks, dayStatus, dayNotes);
+          const combinedNote = [note, stepsSignal, editSignal, paceNote, brilInsight ? `Be Brilliant coaching context: ${brilInsight.slice(0, 300)}` : "", sessionLogNote].filter(Boolean).join(" | ");
+          const nextTask = await generateNextDayTask(plan, dayNum, status, combinedNote, brilInsight, dayTasks, dayStatus, dayNotes);
           if (nextTask) {
             setDayTasks(prev => ({ ...prev, [nextDay]: nextTask }));
           } else {
@@ -5481,8 +5498,8 @@ function DashboardScreen({ plan: initialPlan, onBack, startDate }) {
     const status = dayStatus[prevDay] || 'done';
     setDayGenFailed(prev => ({ ...prev, [dayNum]: false }));
     setGenerating(dayNum);
-    const note = [dayNotes[prevDay] || "", noraInsight ? `Nora coaching context: ${noraInsight.slice(0, 300)}` : ""].filter(Boolean).join(" | ");
-    const nextTask = await generateNextDayTask(plan, prevDay, status, note, noraInsight, dayTasks, dayStatus, dayNotes);
+    const note = [dayNotes[prevDay] || "", brilInsight ? `Be Brilliant coaching context: ${brilInsight.slice(0, 300)}` : ""].filter(Boolean).join(" | ");
+    const nextTask = await generateNextDayTask(plan, prevDay, status, note, brilInsight, dayTasks, dayStatus, dayNotes);
     if (nextTask) {
       setDayTasks(prev => ({ ...prev, [dayNum]: nextTask }));
     } else {
@@ -5505,11 +5522,11 @@ function DashboardScreen({ plan: initialPlan, onBack, startDate }) {
     }
     if (cmds.weekGoal) setWeekGoalOverride(cmds.weekGoal);
     const combinedInsight = [
-      noraInsight,
+      brilInsight,
       weekInsight,
-      noraSessionLog.length ? `Nora session history: ${noraSessionLog.slice(-4).map(s => s.summary).join(" | ")}` : "",
+      brilSessionLog.length ? `Bril session history: ${brilSessionLog.slice(-4).map(s => s.summary).join(" | ")}` : "",
     ].filter(Boolean).join('\n\n');
-    if (weekInsight) setNoraInsight(combinedInsight);
+    if (weekInsight) setBrilInsight(combinedInsight);
     setWeeklyCheckInOpen(null);
     setWeeklyCheckInDone(prev => ({ ...prev, [nextWeek - 1]: weekInsight || true }));
     setPendingWeekGen(null);
@@ -5581,42 +5598,41 @@ function DashboardScreen({ plan: initialPlan, onBack, startDate }) {
         }
         @media (max-width: 420px) {
           .sa-dash-task-card { padding: 20px 16px !important; }
-          .sa-dash-nora-box { padding: 14px 14px !important; }
+          .sa-dash-bril-box { padding: 14px 14px !important; }
         }
-        @media (max-width: 640px) {
-          .sa-dash-week-arc { overflow-x: auto !important; -webkit-overflow-scrolling: touch; }
-          .sa-dash-time-picker { flex-wrap: wrap !important; }
+        @media (max-width: 380px) {
+          .sa-dash-task-card { padding: 16px 12px !important; }
         }
       `}</style>
 
       {/* ── HEADER ── */}
-      <div style={{ background: "linear-gradient(160deg, #1a1730 0%, #2a2445 55%, #1e1835 100%)", padding: "24px clamp(16px, 4vw, 24px) 20px", position: "relative", overflow: "hidden" }}>
+      <div style={{ background: "#F0DCA0", padding: "24px clamp(16px, 4vw, 24px) 20px", position: "relative", overflow: "hidden" }}>
         {/* Subtle ambient glow */}
-        <div style={{ position: "absolute", top: "-20%", right: "-5%", width: 220, height: 220, borderRadius: "50%", background: "radial-gradient(circle, rgba(155,143,224,0.08) 0%, transparent 70%)", pointerEvents: "none" }} />
+        <div style={{ position: "absolute", top: "-20%", right: "-5%", width: 220, height: 220, borderRadius: "50%", background: "transparent", pointerEvents: "none" }} />
         <div style={{ maxWidth: 600, margin: "0 auto", position: "relative", zIndex: 1 }}>
           {/* Top bar */}
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 18 }}>
-            <button onClick={onBack} style={{ background: "none", border: "none", color: "rgba(255,255,255,0.2)", fontFamily: T.sans, fontSize: 12, cursor: "pointer", padding: 0 }}>←</button>
+            <button onClick={onBack} style={{ background: "none", border: "none", color: "#9494A6", fontFamily: T.sans, fontSize: 12, cursor: "pointer", padding: 0 }}>←</button>
             <div style={{ display: "flex", gap: 6 }}>
               <button onClick={() => setProgressOpen(true)}
-                style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 20, padding: "5px 12px", fontFamily: T.sans, fontSize: 12, color: "rgba(255,255,255,0.55)", cursor: "pointer", display: "flex", alignItems: "center", gap: 5, transition: "background 0.15s" }}
-                onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.1)"}
-                onMouseLeave={e => e.currentTarget.style.background = "rgba(255,255,255,0.06)"}>
-                <svg width="12" height="12" viewBox="0 0 14 14" fill="none"><rect x="1" y="7" width="3" height="6" rx="1" fill="rgba(255,255,255,0.55)"/><rect x="5.5" y="4" width="3" height="9" rx="1" fill="rgba(255,255,255,0.55)"/><rect x="10" y="1" width="3" height="12" rx="1" fill="rgba(255,255,255,0.55)"/></svg>
+                style={{ background: "rgba(30,30,42,0.03)", border: `1px solid ${C.border}`, borderRadius: 20, padding: "5px 12px", fontFamily: T.sans, fontSize: 12, color: "#4A4A5C", cursor: "pointer", display: "flex", alignItems: "center", gap: 5, transition: "background 0.15s" }}
+                onMouseEnter={e => e.currentTarget.style.background = "rgba(30,30,42,0.06)"}
+                onMouseLeave={e => e.currentTarget.style.background = "rgba(30,30,42,0.03)"}>
+                <svg width="12" height="12" viewBox="0 0 14 14" fill="none"><rect x="1" y="7" width="3" height="6" rx="1" fill="rgba(90,80,60,0.5)"/><rect x="5.5" y="4" width="3" height="9" rx="1" fill="rgba(90,80,60,0.5)"/><rect x="10" y="1" width="3" height="12" rx="1" fill="rgba(90,80,60,0.5)"/></svg>
                 Progress
               </button>
               <button onClick={() => setArcOpen(o => !o)}
-                style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 20, padding: "5px 12px", fontFamily: T.sans, fontSize: 12, color: "rgba(255,255,255,0.55)", cursor: "pointer", display: "flex", alignItems: "center", gap: 5, transition: "background 0.15s" }}
-                onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.1)"}
-                onMouseLeave={e => e.currentTarget.style.background = "rgba(255,255,255,0.06)"}>
-                <svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M1 7C1 3.686 3.686 1 7 1s6 2.686 6 6-2.686 6-6 6S1 10.314 1 7Z" stroke="rgba(255,255,255,0.55)" strokeWidth="1.3"/><path d="M7 4v3l2 2" stroke="rgba(255,255,255,0.55)" strokeWidth="1.3" strokeLinecap="round"/></svg>
+                style={{ background: "rgba(30,30,42,0.03)", border: `1px solid ${C.border}`, borderRadius: 20, padding: "5px 12px", fontFamily: T.sans, fontSize: 12, color: "#4A4A5C", cursor: "pointer", display: "flex", alignItems: "center", gap: 5, transition: "background 0.15s" }}
+                onMouseEnter={e => e.currentTarget.style.background = "rgba(30,30,42,0.06)"}
+                onMouseLeave={e => e.currentTarget.style.background = "rgba(30,30,42,0.03)"}>
+                <svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M1 7C1 3.686 3.686 1 7 1s6 2.686 6 6-2.686 6-6 6S1 10.314 1 7Z" stroke="#6E6E80" strokeWidth="1.3"/><path d="M7 4v3l2 2" stroke="#6E6E80" strokeWidth="1.3" strokeLinecap="round"/></svg>
                 Goal map
               </button>
             </div>
           </div>
 
           {/* Greeting + week theme */}
-          <p style={{ fontFamily: T.sans, fontSize: 13, color: "rgba(255,255,255,0.35)", margin: "0 0 4px", fontWeight: 500 }}>
+          <p style={{ fontFamily: T.sans, fontSize: 13, color: "#5C5C6E", margin: "0 0 4px", fontWeight: 500 }}>
             {plan.name ? `${plan.name.trim()}'s program` : "Your program"} · Week {currentWeek}
           </p>
           {headerWeekEdit ? (
@@ -5627,7 +5643,7 @@ function DashboardScreen({ plan: initialPlan, onBack, startDate }) {
                 onChange={e => setHeaderWeekDraft(e.target.value)}
                 onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); document.getElementById("header-week-save")?.click(); } if (e.key === "Escape") setHeaderWeekEdit(false); }}
                 placeholder="e.g. Build stakeholder visibility"
-                style={{ width: "100%", padding: "8px 12px", border: "1.5px solid rgba(255,255,255,0.25)", borderRadius: 10, fontFamily: T.sans, fontSize: "clamp(16px, 3vw, 20px)", fontWeight: 600, color: "#fff", background: "rgba(255,255,255,0.06)", outline: "none", boxSizing: "border-box", letterSpacing: -0.3 }}
+                style={{ width: "100%", padding: "8px 12px", border: `1.5px solid ${C.border}`, borderRadius: 10, fontFamily: T.sans, fontSize: "clamp(16px, 3vw, 20px)", fontWeight: 600, color: T.black, background: "rgba(255,255,255,0.5)", outline: "none", boxSizing: "border-box", letterSpacing: -0.3 }}
               />
               <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
                 <button id="header-week-save"
@@ -5643,25 +5659,25 @@ function DashboardScreen({ plan: initialPlan, onBack, startDate }) {
                     if (remainingDays.length > 0) {
                       const newTasks = {};
                       for (const d of remainingDays) {
-                        const t = await generateNextDayTask(plan, d - 1, dayStatus[d - 1] || 'done', `Week focus: ${newFocus}`, noraInsight, dayTasks, dayStatus, dayNotes);
+                        const t = await generateNextDayTask(plan, d - 1, dayStatus[d - 1] || 'done', `Week focus: ${newFocus}`, brilInsight, dayTasks, dayStatus, dayNotes);
                         if (t) newTasks[d] = t;
                       }
                       setDayTasks(prev => ({ ...prev, ...newTasks }));
                     }
                     setGoalUpdating(false);
                   }}
-                  style={{ background: headerWeekDraft.trim() && !goalUpdating ? "rgba(255,255,255,0.15)" : "rgba(255,255,255,0.04)", color: headerWeekDraft.trim() ? "#fff" : "rgba(255,255,255,0.25)", border: "1px solid rgba(255,255,255,0.15)", borderRadius: 8, padding: "6px 14px", fontFamily: T.sans, fontSize: 12, fontWeight: 600, cursor: headerWeekDraft.trim() && !goalUpdating ? "pointer" : "default" }}>
+                  style={{ background: headerWeekDraft.trim() && !goalUpdating ? "rgba(30,30,42,0.1)" : "rgba(30,30,42,0.04)", color: headerWeekDraft.trim() ? T.black : "rgba(30,30,42,0.35)", border: `1.5px solid ${C.border}`, borderRadius: 8, padding: "6px 14px", fontFamily: T.sans, fontSize: 12, fontWeight: 600, cursor: headerWeekDraft.trim() && !goalUpdating ? "pointer" : "default" }}>
                   {goalUpdating ? "Saving…" : "Save + regenerate"}
                 </button>
                 <button onClick={() => setHeaderWeekEdit(false)}
-                  style={{ background: "none", border: "none", fontFamily: T.sans, fontSize: 12, color: "rgba(255,255,255,0.3)", cursor: "pointer", padding: "6px 8px" }}>
+                  style={{ background: "none", border: "none", fontFamily: T.sans, fontSize: 12, color: "#6E6E80", cursor: "pointer", padding: "6px 8px" }}>
                   Cancel
                 </button>
               </div>
             </div>
           ) : (
             <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "0 0 4px" }}>
-              <h1 style={{ fontFamily: T.sans, fontSize: "clamp(18px,3.5vw,24px)", fontWeight: 700, color: "#fff", margin: 0, lineHeight: 1.25, letterSpacing: -0.5 }}>
+              <h1 style={{ fontFamily: T.sans, fontSize: "clamp(18px,3.5vw,24px)", fontWeight: 700, color: T.black, margin: 0, lineHeight: 1.25, letterSpacing: -0.5 }}>
                 {currentWeekTheme}
               </h1>
             </div>
@@ -5671,10 +5687,10 @@ function DashboardScreen({ plan: initialPlan, onBack, startDate }) {
           {(() => {
             const goalTexts = GOAL_TEXTS;
             const rawGoalText = plan._answers?.goal_custom || goalTexts[plan._answers?.goal];
-            const displayText = (noraChangeMade && goalStatement) ? goalStatement : rawGoalText;
+            const displayText = (brilChangeMade && goalStatement) ? goalStatement : rawGoalText;
             return displayText ? (
-              <p style={{ fontFamily: T.sans, fontSize: 14, color: "rgba(255,255,255,0.4)", margin: "0 0 16px", lineHeight: 1.5 }}>
-                <span style={{ fontWeight: 600, letterSpacing: "0.05em", textTransform: "uppercase", fontSize: 11, color: "rgba(255,255,255,0.25)" }}>Goal </span>
+              <p style={{ fontFamily: T.sans, fontSize: 14, color: "#5C5C6E", margin: "0 0 16px", lineHeight: 1.5 }}>
+                <span style={{ fontWeight: 600, letterSpacing: "0.05em", textTransform: "uppercase", fontSize: 11, color: "#8888A0" }}>Goal </span>
                 {displayText}
               </p>
             ) : null;
@@ -5735,12 +5751,12 @@ function DashboardScreen({ plan: initialPlan, onBack, startDate }) {
                   </svg>
                 </span>
                 <div>
-                  <p key={cashPot} style={{ fontFamily: T.sans, fontSize: 16, fontWeight: 800, color: "#fad568", margin: 0, lineHeight: 1, animation: cashAnimations.length > 0 ? "cashNumTick 0.35s ease 0.6s both" : "none" }}>{cashPot}</p>
-                  <p style={{ fontFamily: T.sans, fontSize: 11, color: "rgba(240,180,41,0.55)", margin: 0, textTransform: "uppercase", letterSpacing: 0.8, fontWeight: 600 }}>Creds</p>
+                  <p key={cashPot} style={{ fontFamily: T.sans, fontSize: 16, fontWeight: 800, color: "#8B6914", margin: 0, lineHeight: 1, animation: cashAnimations.length > 0 ? "cashNumTick 0.35s ease 0.6s both" : "none" }}>{cashPot}</p>
+                  <p style={{ fontFamily: T.sans, fontSize: 11, color: "rgba(120,90,20,0.7)", margin: 0, textTransform: "uppercase", letterSpacing: 0.8, fontWeight: 600 }}>Creds</p>
                 </div>
               </div>
               {cashAnimations.map(anim => (
-                <div key={anim.id} style={{ position: "absolute", bottom: "100%", left: "50%", transform: "translateX(-50%)", pointerEvents: "none", zIndex: 10, fontFamily: T.sans, fontSize: 13, fontWeight: 800, color: "#fad568", whiteSpace: "nowrap", textShadow: "0 2px 8px rgba(240,180,41,0.8)", animation: "actEarned 1.3s ease-out forwards" }}>+{anim.amount} Cr</div>
+                <div key={anim.id} style={{ position: "absolute", bottom: "100%", left: "50%", transform: "translateX(-50%)", pointerEvents: "none", zIndex: 10, fontFamily: T.sans, fontSize: 13, fontWeight: 800, color: "#8B6914", whiteSpace: "nowrap", textShadow: "0 2px 8px rgba(139,105,20,0.4)", animation: "actEarned 1.3s ease-out forwards" }}>+{anim.amount} Cr</div>
               ))}
             </div>
 
@@ -5748,14 +5764,14 @@ function DashboardScreen({ plan: initialPlan, onBack, startDate }) {
             <div style={{
               height: 54, padding: "0 14px",
               borderRadius: 14,
-              background: streakCount >= 7 ? "rgba(251,191,36,0.1)" : streakCount >= 3 ? "rgba(251,146,60,0.08)" : "rgba(255,255,255,0.04)",
-              border: `1px solid ${streakCount >= 7 ? "rgba(251,191,36,0.25)" : streakCount >= 3 ? "rgba(251,146,60,0.2)" : "rgba(255,255,255,0.08)"}`,
+              background: streakCount >= 7 ? "rgba(251,191,36,0.15)" : streakCount >= 3 ? "rgba(251,146,60,0.12)" : "rgba(30,30,42,0.04)",
+              border: `1px solid ${streakCount >= 7 ? "rgba(180,140,20,0.35)" : streakCount >= 3 ? "rgba(180,120,40,0.25)" : "rgba(30,30,42,0.1)"}`,
               display: "flex", alignItems: "center", gap: 6, flexShrink: 0, transition: "all 0.3s",
             }}>
               <span style={{ fontSize: 16 }}>🔥</span>
               <div>
-                <p style={{ fontFamily: T.sans, fontSize: 16, fontWeight: 800, color: "#fff", margin: 0, lineHeight: 1 }}>{streakCount || 0}</p>
-                <p style={{ fontFamily: T.sans, fontSize: 11, color: "rgba(255,255,255,0.35)", margin: 0, textTransform: "uppercase", letterSpacing: 0.8, fontWeight: 600 }}>streak</p>
+                <p style={{ fontFamily: T.sans, fontSize: 16, fontWeight: 800, color: T.black, margin: 0, lineHeight: 1 }}>{streakCount || 0}</p>
+                <p style={{ fontFamily: T.sans, fontSize: 11, color: "#6E5C3A", margin: 0, textTransform: "uppercase", letterSpacing: 0.8, fontWeight: 600 }}>streak</p>
               </div>
             </div>
 
@@ -5768,20 +5784,20 @@ function DashboardScreen({ plan: initialPlan, onBack, startDate }) {
                 <div style={{
                   height: 54, padding: "0 10px 0 6px",
                   borderRadius: 14,
-                  background: "rgba(255,255,255,0.04)",
-                  border: "1px solid rgba(255,255,255,0.08)",
+                  background: "rgba(30,30,42,0.04)",
+                  border: "1px solid rgba(30,30,42,0.1)",
                   display: "flex", alignItems: "center", gap: 6, flexShrink: 0,
                 }}>
                   <svg width="38" height="38" viewBox="0 0 38 38">
-                    <circle cx="19" cy="19" r="17" fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="3" />
-                    <circle cx="19" cy="19" r="17" fill="none" stroke={pct >= 1 ? "#4AE080" : "#9B8FE0"} strokeWidth="3" strokeLinecap="round"
+                    <circle cx="19" cy="19" r="17" fill="none" stroke="rgba(30,30,42,0.1)" strokeWidth="3" />
+                    <circle cx="19" cy="19" r="17" fill="none" stroke={pct >= 1 ? "#4AE080" : "#F0C050"} strokeWidth="3" strokeLinecap="round"
                       strokeDasharray={`${pct * circumference} ${circumference}`}
                       style={{ transform: "rotate(-90deg)", transformOrigin: "center", transition: "stroke-dasharray 0.5s ease" }} />
-                    <text x="19" y="20" textAnchor="middle" dominantBaseline="middle" style={{ fontFamily: "Inter, sans-serif", fontSize: 11, fontWeight: 800, fill: "#fff" }}>{weekDone}</text>
+                    <text x="19" y="20" textAnchor="middle" dominantBaseline="middle" style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 11, fontWeight: 800, fill: "#2C2C3A" }}>{weekDone}</text>
                   </svg>
                   <div>
-                    <p style={{ fontFamily: T.sans, fontSize: 10, color: "rgba(255,255,255,0.35)", margin: 0, textTransform: "uppercase", letterSpacing: 0.8, fontWeight: 600, lineHeight: 1.3 }}>this</p>
-                    <p style={{ fontFamily: T.sans, fontSize: 10, color: "rgba(255,255,255,0.35)", margin: 0, textTransform: "uppercase", letterSpacing: 0.8, fontWeight: 600, lineHeight: 1.3 }}>week</p>
+                    <p style={{ fontFamily: T.sans, fontSize: 10, color: "#6E5C3A", margin: 0, textTransform: "uppercase", letterSpacing: 0.8, fontWeight: 600, lineHeight: 1.3 }}>this</p>
+                    <p style={{ fontFamily: T.sans, fontSize: 10, color: "#6E5C3A", margin: 0, textTransform: "uppercase", letterSpacing: 0.8, fontWeight: 600, lineHeight: 1.3 }}>week</p>
                   </div>
                 </div>
               );
@@ -5864,7 +5880,7 @@ function DashboardScreen({ plan: initialPlan, onBack, startDate }) {
                           <p style={{ fontFamily: T.sans, fontSize: 11, color: isActive ? T.purple : T.muted, margin: "0 0 5px", fontWeight: isActive ? 700 : 500, letterSpacing: 0.3 }}>{d}</p>
                           <div style={{
                             height: 36, borderRadius: 10,
-                            background: status === 'done' ? "linear-gradient(135deg, #7c6f9f, #9B8FD0)" : status === 'skipped' ? "#EEEDEE" : isActive ? T.purpleL : "#F2F1F4",
+                            background: status === 'done' ? "#E8A820" : status === 'skipped' ? "#EEEDEE" : isActive ? T.purpleL : "#F2F1F4",
                             border: isActive && !status ? `2px solid ${T.purpleMid}` : "2px solid transparent",
                             display: "flex", alignItems: "center", justifyContent: "center",
                             opacity: isFuture && !isGeneratingThis ? 0.3 : 1,
@@ -5873,7 +5889,7 @@ function DashboardScreen({ plan: initialPlan, onBack, startDate }) {
                             {status === 'done' && <span style={{ color: "#fff", fontSize: 13, fontWeight: 700 }}>✓</span>}
                             {status === 'skipped' && <span style={{ color: T.muted, fontSize: 11 }}>–</span>}
                             {!status && !isFuture && <div style={{ width: 5, height: 5, borderRadius: "50%", background: isActive ? T.purple : "#C8C4DC" }} />}
-                            {isFuture && isGeneratingThis && <div style={{ width: 5, height: 5, borderRadius: "50%", background: T.purpleMid, opacity: 0.5 }} />}
+                            {isFuture && isGeneratingThis && <div style={{ width: 5, height: 5, borderRadius: "50%", background: T.peach, opacity: 0.5 }} />}
                             {isFuture && !isGeneratingThis && <svg width="6" height="7" viewBox="0 0 8 9" fill="none"><rect x="0.5" y="3.5" width="7" height="5" rx="1.2" stroke="#C8C4DC" strokeWidth="1.1"/><path d="M2 3.5V2.5a2 2 0 0 1 4 0v1" stroke="#C8C4DC" strokeWidth="1.1" strokeLinecap="round"/></svg>}
                           </div>
                         </div>
@@ -5915,7 +5931,7 @@ function DashboardScreen({ plan: initialPlan, onBack, startDate }) {
                 <p style={{ fontFamily: T.serif, fontSize: 17, color: T.black, margin: "0 0 6px", fontWeight: 400 }}>Could not build Day {dayNum}.</p>
                 <p style={{ fontFamily: T.sans, fontSize: 14, color: T.muted, margin: "0 0 20px", lineHeight: 1.6 }}>Check your connection and try again.</p>
                 <button onClick={() => retryDayGen(dayNum)}
-                  style={{ background: T.black, color: "#fff", border: "none", fontFamily: T.sans, fontSize: 14, fontWeight: 600, padding: "11px 24px", borderRadius: 10, cursor: "pointer" }}>
+                  style={{ background: T.purple, color: "#fff", border: "none", fontFamily: T.sans, fontSize: 14, fontWeight: 600, padding: "11px 24px", borderRadius: 10, cursor: "pointer" }}>
                   Try again
                 </button>
               </div>
@@ -5943,7 +5959,7 @@ function DashboardScreen({ plan: initialPlan, onBack, startDate }) {
                 <p style={{ fontFamily: T.serif, fontSize: 17, color: T.black, margin: "0 0 6px", fontWeight: 400 }}>Could not build Day {dayNum}.</p>
                 <p style={{ fontFamily: T.sans, fontSize: 14, color: T.muted, margin: "0 0 20px", lineHeight: 1.6 }}>Check your connection and try again.</p>
                 <button onClick={() => retryDayGen(dayNum)}
-                  style={{ background: T.black, color: "#fff", border: "none", fontFamily: T.sans, fontSize: 14, fontWeight: 600, padding: "11px 24px", borderRadius: 8, cursor: "pointer" }}>
+                  style={{ background: T.purple, color: "#fff", border: "none", fontFamily: T.sans, fontSize: 14, fontWeight: 600, padding: "11px 24px", borderRadius: 8, cursor: "pointer" }}>
                   Try again
                 </button>
               </div>
@@ -5964,7 +5980,7 @@ function DashboardScreen({ plan: initialPlan, onBack, startDate }) {
               )}
               {/* ── DAILY TIME PICKER — only when task not yet done/skipped ── */}
               {!status && task && (
-                <div style={{ background: "#fff", border: `1px solid #E8E6F2`, borderRadius: 16, padding: "16px 20px", marginBottom: 16 }}>
+                <div style={{ background: "#fff", border: `1px solid #E6E4EE`, borderRadius: 16, padding: "16px 20px", marginBottom: 16 }}>
                   <p style={{ fontFamily: T.sans, fontSize: 13, fontWeight: 600, color: T.body, margin: "0 0 10px" }}>How much time do you have today?</p>
                   <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                     {["15 min", "30 min", "45 min", "1 hour", "3 hours", "5 hours+"].map(opt => {
@@ -5990,7 +6006,7 @@ function DashboardScreen({ plan: initialPlan, onBack, startDate }) {
                             if (cfg.count === 1) {
                               // Single task: regenerate with exact time constraint
                               const timeHint = `TIME AVAILABLE TODAY: ${opt}. Generate exactly 1 task that takes exactly ${opt}. Include ${cfg.stepsPerTask} concrete steps. Set the "time" field to exactly "${opt}".`;
-                              const t = await generateNextDayTask(plan, dayNum - 1, dayStatus[dayNum - 1] || 'done', timeHint, noraInsight, dayTasks, dayStatus, dayNotes);
+                              const t = await generateNextDayTask(plan, dayNum - 1, dayStatus[dayNum - 1] || 'done', timeHint, brilInsight, dayTasks, dayStatus, dayNotes);
                               if (t) {
                                 t.time = opt;
                                 t._subtasks = null;
@@ -6036,11 +6052,11 @@ Main blockers: ${normalizeBlocker(_answers.blocker).map(b => BLOCKER_TEXTS[b]).f
 Readiness: ${_cl.readinessLevel || "medium"}
 
 ═══ GOAL CONTEXT ═══
-12-month goal: ${_answers.goal_custom || GOAL_TEXTS[_answers.goal] || "move forward"}${_goalDetail ? ` (${_goalDetail})` : ""}${_goalDir ? `\nTarget direction: ${_goalDir}` : ""}${_goalStmt ? `\nNora-refined goal: "${_goalStmt}"` : ""}
+12-month goal: ${_answers.goal_custom || GOAL_TEXTS[_answers.goal] || "move forward"}${_goalDetail ? ` (${_goalDetail})` : ""}${_goalDir ? `\nTarget direction: ${_goalDir}` : ""}${_goalStmt ? `\nBe Brilliant-refined goal: "${_goalStmt}"` : ""}
 
 ═══ THIS WEEK ═══
 Week ${_wkNum} focus: "${_wkTheme}"
-${noraInsight ? `\n═══ NORA COACHING CONTEXT ═══\n${noraInsight.slice(0, 400)}\n` : ""}
+${brilInsight ? `\n═══ BE BRILLIANT COACHING CONTEXT ═══\n${brilInsight.slice(0, 400)}\n` : ""}
 ═══ RECENT HISTORY ═══
 ${_dayHist || "No previous days yet."}
 
@@ -6062,7 +6078,7 @@ ${timeHint}`;
                               } catch (innerErr) {
                                 console.error("Multi-task generation failed:", innerErr);
                                 // Fallback: single task for full duration
-                                const t = await generateNextDayTask(plan, dayNum - 1, dayStatus[dayNum - 1] || 'done', `TIME AVAILABLE TODAY: ${opt}. Generate 1 substantial task of ${opt} with ${cfg.stepsPerTask} detailed steps. Set "time" to "${opt}".`, noraInsight, dayTasks, dayStatus, dayNotes);
+                                const t = await generateNextDayTask(plan, dayNum - 1, dayStatus[dayNum - 1] || 'done', `TIME AVAILABLE TODAY: ${opt}. Generate 1 substantial task of ${opt} with ${cfg.stepsPerTask} detailed steps. Set "time" to "${opt}".`, brilInsight, dayTasks, dayStatus, dayNotes);
                                 if (t) { t.time = opt; setDayTasks(prev => ({ ...prev, [dayNum]: t })); }
                               }
                             }
@@ -6124,7 +6140,7 @@ ${timeHint}`;
                     {allTasks.map((t, ti) => {
                   const tColors = tagColors[t.tag] || tagColors["Read"];
                   return (
-                    <div key={ti} className="sa-dash-task-card" style={{ background: "#fff", border: `1px solid ${status === 'done' ? "#E8E6F2" : status === 'skipped' ? T.border : "#E8E6F2"}`, borderRadius: 20, padding: "28px 24px", marginBottom: 16, boxShadow: "0 2px 12px rgba(26,23,48,0.05)" }}>
+                    <div key={ti} className="sa-dash-task-card" style={{ background: "#fff", border: `1px solid ${status === 'done' ? "#E6E4EE" : status === 'skipped' ? T.border : "#E6E4EE"}`, borderRadius: 20, padding: "28px 24px", marginBottom: 16, boxShadow: "0 2px 12px rgba(26,23,48,0.05)" }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
                         <span style={{ fontFamily: T.sans, fontSize: 13, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", padding: "5px 12px", background: tColors.bg, color: tColors.text, border: `1.5px solid ${tColors.border}`, borderRadius: 6 }}>{t.tag}</span>
                         <span style={{ fontFamily: T.sans, fontSize: 14, color: T.muted }}>{t.time}</span>
@@ -6153,18 +6169,18 @@ ${timeHint}`;
                 );
               })()}
               {!status && (
-                <div className="sa-dash-nora-box" style={{ background: "#fff", border: `1px solid #E8E6F2`, borderRadius: 16, padding: "18px 20px", marginBottom: 16, display: "flex", alignItems: "center", gap: 14 }}>
+                <div className="sa-dash-bril-box" style={{ background: "#fff", border: `1px solid #E6E4EE`, borderRadius: 16, padding: "18px 20px", marginBottom: 16, display: "flex", alignItems: "center", gap: 14 }}>
                   <div style={{ width: 40, height: 40, borderRadius: "50%", background: T.grad, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                    <span style={{ fontFamily: T.serif, fontSize: 16, color: "#fff", fontStyle: "italic" }}>N</span>
+                    <span style={{ fontFamily: T.serif, fontSize: 16, color: "#8B6914", fontStyle: "italic" }}>B</span>
                   </div>
                   <div style={{ flex: 1 }}>
                     <p style={{ fontFamily: T.sans, fontSize: 13, color: T.body, margin: "0 0 10px", lineHeight: 1.55 }}>
-                      <strong style={{ fontWeight: 600, color: T.purpleD }}>Not sure how to approach this task?</strong>{" "}Brainstorm with Nora. She'll adjust your program based on what you share.
+                      <strong style={{ fontWeight: 600, color: T.purpleD }}>Stuck on this one?</strong>{" "}Brainstorm with Be Brilliant — it'll adjust your program based on what you share. No judgment, only progress.
                     </p>
                     <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                      <button onClick={() => setNoraOpen(true)}
+                      <button onClick={() => setBrilOpen(true)}
                         style={{ background: T.purple, border: "none", borderRadius: 8, padding: "7px 16px", fontFamily: T.sans, fontSize: 13, fontWeight: 600, color: "#fff", cursor: "pointer" }}>
-                        Talk to Nora →
+                        Talk to Be Brilliant →
                       </button>
                     </div>
                   </div>
@@ -6173,20 +6189,20 @@ ${timeHint}`;
 
               {/* ── COMPLETION ── */}
               {!status && !showCelebration[dayNum] && (
-                <div style={{ background: "#fff", borderRadius: 16, padding: "20px 22px", border: `1px solid #E8E6F2` }}>
-                  <p style={{ fontFamily: T.sans, fontSize: 15, fontWeight: 600, color: T.ink, margin: "0 0 16px" }}>Done with today's task?</p>
+                <div style={{ background: "#fff", borderRadius: 20, padding: "22px 24px", border: `1.5px solid ${C.border}` }}>
+                  <p style={{ fontFamily: T.serif, fontSize: 18, fontWeight: 400, color: T.ink, margin: "0 0 16px" }}>Did you do the thing?</p>
                   <div style={{ display: "flex", gap: 10 }}>
                     <button onClick={() => markDay(dayNum, 'done')}
-                      style={{ flex: 1, background: T.purple, color: "#fff", border: "none", borderRadius: 12, padding: "15px 0", fontFamily: T.sans, fontSize: 16, fontWeight: 600, cursor: "pointer", letterSpacing: -0.2, transition: "transform 0.12s", boxShadow: "0 2px 10px rgba(124,111,159,0.3)" }}
-                      onMouseEnter={e => e.currentTarget.style.transform = "translateY(-1px)"}
-                      onMouseLeave={e => e.currentTarget.style.transform = "translateY(0)"}>
-                      Done ✓
+                      style={{ flex: 1, background: T.purple, color: T.black, border: "none", borderRadius: 50, padding: "15px 0", fontFamily: T.sans, fontSize: 16, fontWeight: 600, cursor: "pointer", letterSpacing: -0.2, transition: "transform 0.12s", boxShadow: "0 2px 10px rgba(232,168,32,0.18)" }}
+                      onMouseEnter={e => e.currentTarget.style.transform = "translateY(-1px) scale(1.01)"}
+                      onMouseLeave={e => e.currentTarget.style.transform = "translateY(0) scale(1)"}>
+                      Nailed it ✦
                     </button>
                     <button onClick={() => markDay(dayNum, 'skipped')}
-                      style={{ flex: 0.6, background: "#F8F7FC", color: T.muted, border: `1px solid #E8E6F2`, borderRadius: 12, padding: "15px 0", fontFamily: T.sans, fontSize: 15, cursor: "pointer", transition: "background 0.12s" }}
+                      style={{ flex: 0.5, background: C.offWhite, color: T.muted, border: `1px solid ${C.border}`, borderRadius: 50, padding: "15px 0", fontFamily: T.sans, fontSize: 14, cursor: "pointer", transition: "background 0.12s" }}
                       onMouseEnter={e => e.currentTarget.style.background = "#F0EFF8"}
-                      onMouseLeave={e => e.currentTarget.style.background = "#F8F7FC"}>
-                      Skip
+                      onMouseLeave={e => e.currentTarget.style.background = C.offWhite}>
+                      Not today
                     </button>
                   </div>
                 </div>
@@ -6196,22 +6212,22 @@ ${timeHint}`;
               {status === 'done' && dayNum < 56 && (
                 <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                   {/* Celebration card */}
-                  <div style={{ background: "linear-gradient(135deg, #1e1a30 0%, #3a2d70 100%)", borderRadius: 20, padding: "22px 24px" }}>
-                    {streakCount === 3 && <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", color: "rgba(184,176,216,0.6)", margin: "0 0 6px" }}>3-day streak · The habit is starting.</p>}
-                    {streakCount === 7 && <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", color: "rgba(184,176,216,0.6)", margin: "0 0 6px" }}>7 days straight · One full week.</p>}
-                    {streakCount === 14 && <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", color: "rgba(184,176,216,0.6)", margin: "0 0 6px" }}>Two weeks · Most people stop here. You didn't.</p>}
-                    {streakCount === 21 && <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", color: "rgba(184,176,216,0.6)", margin: "0 0 6px" }}>21 days · This is where it locks in.</p>}
-                    {streakCount === 30 && <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", color: "rgba(184,176,216,0.6)", margin: "0 0 6px" }}>30 days · You built something real.</p>}
-                    <p style={{ fontFamily: T.serif, fontSize: 20, color: "#fff", margin: "0 0 4px", fontWeight: 400 }}>Day {dayNum} done.{streakCount > 1 ? ` 🔥 ${streakCount}` : " ✓"}</p>
+                  <div style={{ background: "#F0DCA0", borderRadius: 20, padding: "22px 24px", border: "1.5px solid #D8B860" }}>
+                    {streakCount === 3 && <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", color: T.purple, margin: "0 0 6px" }}>3-day streak · Look at you go.</p>}
+                    {streakCount === 7 && <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", color: T.purple, margin: "0 0 6px" }}>7 days straight · A whole week. Brilliant.</p>}
+                    {streakCount === 14 && <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", color: T.purple, margin: "0 0 6px" }}>Two weeks · Most people quit by now. Not you.</p>}
+                    {streakCount === 21 && <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", color: T.purple, margin: "0 0 6px" }}>21 days · Okay, this is officially a habit now.</p>}
+                    {streakCount === 30 && <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", color: T.purple, margin: "0 0 6px" }}>30 days · You absolute legend.</p>}
+                    <p style={{ fontFamily: T.serif, fontSize: 20, color: T.black, margin: "0 0 4px", fontWeight: 400 }}>Day {dayNum} — crushed it.{streakCount > 1 ? ` 🔥 ${streakCount}` : " ✦"}</p>
                     {goalUpdatedDay === dayNum && (
-                      <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: 1.2, textTransform: "uppercase", color: "rgba(184,176,216,0.5)", margin: "0 0 6px" }}>Goal updated, tasks reshaped ✓</p>
+                      <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: 1.2, textTransform: "uppercase", color: T.purple, margin: "0 0 6px" }}>Goal updated, tasks reshaped ✓</p>
                     )}
-                    {note && <p style={{ fontFamily: T.sans, fontSize: 13, color: "rgba(255,255,255,0.55)", margin: "0 0 10px", fontStyle: "italic" }}>{note}</p>}
+                    {note && <p style={{ fontFamily: T.sans, fontSize: 13, color: "#4A4A5C", margin: "0 0 10px", fontStyle: "italic" }}>{note}</p>}
 
                     {/* Inspirational quote from curated library */}
                     {dailyQuotes[dayNum] && (
-                      <div style={{ borderTop: "1px solid rgba(255,255,255,0.08)", paddingTop: 12, marginTop: 6 }}>
-                        <p style={{ fontFamily: T.serif, fontSize: 15, color: "rgba(255,255,255,0.65)", margin: "0 0 5px", lineHeight: 1.6, fontStyle: "italic" }}>
+                      <div style={{ borderTop: `1px solid ${T.border}`, paddingTop: 12, marginTop: 6 }}>
+                        <p style={{ fontFamily: T.serif, fontSize: 15, color: T.body, margin: "0 0 5px", lineHeight: 1.6, fontStyle: "italic" }}>
                           {dailyQuotes[dayNum].text}
                         </p>
 
@@ -6221,7 +6237,7 @@ ${timeHint}`;
 
                   {/* Up next */}
                   {dayNum < 56 && (
-                    <div style={{ background: "#fff", border: `1px solid #E8E6F2`, borderRadius: 16, padding: "18px 20px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+                    <div style={{ background: "#fff", border: `1px solid #E6E4EE`, borderRadius: 16, padding: "18px 20px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
                       <div>
                         <p style={{ fontFamily: T.sans, fontSize: 12, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", color: T.muted, margin: "0 0 4px" }}>Up next</p>
                         <p style={{ fontFamily: T.serif, fontSize: 17, color: T.black, margin: 0, fontWeight: 400 }}>
@@ -6234,7 +6250,7 @@ ${timeHint}`;
                         style={{ background: dayTasks[dayNum + 1] ? T.black : T.cream, color: dayTasks[dayNum + 1] ? "#fff" : T.muted, border: "none", borderRadius: 10, padding: "12px 20px", fontFamily: T.sans, fontSize: 15, fontWeight: 600, cursor: dayTasks[dayNum + 1] ? "pointer" : "default", flexShrink: 0, display: "flex", alignItems: "center", gap: 8 }}>
                         {!dayTasks[dayNum + 1]
                           ? <><div style={{ width: 14, height: 14, borderRadius: "50%", border: `2px solid ${T.muted}`, borderTop: `2px solid ${T.purple}`, animation: "spin 0.8s linear infinite" }} />Building…</>
-                          : <>Start Day {dayNum + 1} →</>
+                          : <>Bring on Day {dayNum + 1} →</>
                         }
                       </button>
                     </div>
@@ -6243,19 +6259,19 @@ ${timeHint}`;
               )}
 
               {status === 'skipped' && dayNum < 56 && (
-                <div style={{ background: "#FAFAF8", borderRadius: 20, padding: "22px 24px", border: `1px solid #E8E6F2` }}>
+                <div style={{ background: "#FAFAF8", borderRadius: 20, padding: "22px 24px", border: `1px solid #E6E4EE` }}>
                   <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", color: T.muted, margin: "0 0 8px" }}>The program adjusted</p>
                   <p style={{ fontFamily: T.sans, fontSize: 16, color: T.ink, margin: "0 0 6px", fontWeight: 600 }}>Tomorrow is shorter. You're still in it.</p>
                   {note && <p style={{ fontFamily: T.sans, fontSize: 13, color: T.muted, margin: "0 0 8px", fontStyle: "italic" }}>{note}</p>}
                   <p style={{ fontFamily: T.sans, fontSize: 14, color: T.body, margin: "0 0 16px", lineHeight: 1.65 }}>Day {dayNum + 1} has been scaled down based on today. Missing a day isn't the same as stopping.</p>
                   {dayTasks[dayNum + 1] ? (
                     <button onClick={() => { setActiveDay(dayNum + 1); window.scrollTo({ top: 0, behavior: "smooth" }); }}
-                      style={{ background: T.purple, color: "#fff", border: "none", borderRadius: 12, padding: "13px 22px", fontFamily: T.sans, fontSize: 15, fontWeight: 600, cursor: "pointer", boxShadow: "0 2px 10px rgba(124,111,159,0.3)" }}>
+                      style={{ background: T.purple, color: "#fff", border: "none", borderRadius: 12, padding: "13px 22px", fontFamily: T.sans, fontSize: 15, fontWeight: 600, cursor: "pointer", boxShadow: "0 2px 10px rgba(232,168,32,0.18)" }}>
                       See Day {dayNum + 1} →
                     </button>
                   ) : (
                     <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 0" }}>
-                      <div style={{ width: 16, height: 16, borderRadius: "50%", border: `2.5px solid #E8E6F2`, borderTop: `2.5px solid ${T.purple}`, animation: "spin 0.8s linear infinite", flexShrink: 0 }} />
+                      <div style={{ width: 16, height: 16, borderRadius: "50%", border: `2.5px solid #E6E4EE`, borderTop: `2.5px solid ${T.purple}`, animation: "spin 0.8s linear infinite", flexShrink: 0 }} />
                       <span style={{ fontFamily: T.sans, fontSize: 14, color: T.muted }}>Building your next task...</span>
                     </div>
                   )}
@@ -6280,13 +6296,13 @@ ${timeHint}`;
                   <div style={{ borderRadius: 16, overflow: "hidden", border: `1px solid ${isDone ? T.purpleMid : T.border}` }}>
                     {/* Top, week complete */}
                     <div style={{ background: isDone ? T.grad : "#F4F4F6", padding: "24px 24px 20px" }}>
-                      <p style={{ fontFamily: T.sans, fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", color: isDone ? "rgba(255,255,255,0.5)" : T.muted, margin: "0 0 8px" }}>Week {wkNum} complete · {doneThisWeek}/7 days</p>
-                      <p style={{ fontFamily: T.serif, fontSize: 22, color: isDone ? "#fff" : T.black, margin: "0 0 8px", fontWeight: 400, lineHeight: 1.3 }}>
+                      <p style={{ fontFamily: T.sans, fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", color: isDone ? "#8B6914" : T.muted, margin: "0 0 8px" }}>Week {wkNum} complete · {doneThisWeek}/7 days</p>
+                      <p style={{ fontFamily: T.serif, fontSize: 22, color: isDone ? "#2C2C3A" : T.black, margin: "0 0 8px", fontWeight: 400, lineHeight: 1.3 }}>
                         {wkMilestone[wkNum] || (isDone ? `${doneThisWeek} of 7 days. That's the week.` : `${doneThisWeek} of 7. Still a week.`)}
                       </p>
                       {isDone && (
-                        <div style={{ display: "inline-flex", alignItems: "center", gap: 6, background: "rgba(255,255,255,0.1)", borderRadius: 20, padding: "4px 12px" }}>
-                          <span style={{ fontFamily: T.sans, fontSize: 13, color: "rgba(255,255,255,0.6)", fontStyle: "italic" }}>{ARCHETYPE_IDENTITY[plan.profileName] || plan.profileName}</span>
+                        <div style={{ display: "inline-flex", alignItems: "center", gap: 6, background: "rgba(30,30,42,0.05)", borderRadius: 20, padding: "4px 12px" }}>
+                          <span style={{ fontFamily: T.sans, fontSize: 13, color: "#4A4A5C", fontStyle: "italic" }}>{ARCHETYPE_IDENTITY[plan.profileName] || plan.profileName}</span>
                         </div>
                       )}
                       {/* Task type balance bar for this week */}
@@ -6303,7 +6319,7 @@ ${timeHint}`;
                         const order = ["Apply", "Read", "Reflect", "Tool"];
                         return (
                           <div style={{ marginTop: 16 }}>
-                            <p style={{ fontFamily: T.sans, fontSize: 10, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", color: "rgba(255,255,255,0.35)", margin: "0 0 6px" }}>This week's mix</p>
+                            <p style={{ fontFamily: T.sans, fontSize: 10, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", color: "#5C5C6E", margin: "0 0 6px" }}>This week's mix</p>
                             <div style={{ display: "flex", height: 6, borderRadius: 4, overflow: "hidden", gap: 1 }}>
                               {order.map(tag => {
                                 const pct = (tagTally[tag] / wkTotal) * 100;
@@ -6331,7 +6347,7 @@ ${timeHint}`;
                         <p style={{ fontFamily: T.serif, fontSize: 18, color: isDone ? T.purpleD : T.black, margin: "0 0 4px", fontWeight: 400, fontStyle: "italic" }}>{nextWkTheme}</p>
                         <p style={{ fontFamily: T.sans, fontSize: 13, color: T.muted, margin: 0, lineHeight: 1.5 }}>
                           {isDone
-                            ? wkNum === 1 ? "Nora adapts what's next based on how this week went."
+                            ? wkNum === 1 ? "Be Brilliant adapts what's next based on how this week went."
                             : "Each week's focus is shaped by what you've built so far."
                             : `This week's tasks are ready when you are.`
                           }
@@ -6353,8 +6369,8 @@ ${timeHint}`;
 
       {/* ── PROACTIVE NORA NUDGE, triggered on risk patterns ── */}
       {(() => {
-        // Don't show if Nora is open, modal is open, nudge dismissed, week is generating, task is generating, or celebration is showing
-        if (noraOpen || weeklyCheckInOpen || arcOpen || progressOpen || nudgeDismissed || weekGenerating || generating || celebrationModal) return null;
+        // Don't show if Bril is open, modal is open, nudge dismissed, week is generating, task is generating, or celebration is showing
+        if (brilOpen || weeklyCheckInOpen || arcOpen || progressOpen || nudgeDismissed || weekGenerating || generating || celebrationModal) return null;
 
         const doneArr = Object.entries(dayStatus).filter(([,s]) => s === 'done').map(([d]) => +d);
         const skipArr = Object.entries(dayStatus).filter(([,s]) => s === 'skipped').map(([d]) => +d);
@@ -6382,39 +6398,39 @@ ${timeHint}`;
         // Pick highest-priority signal
         let nudge = null;
         if (doubleSkip) nudge = {
-          headline: "Two days skipped.",
-          body: "That's not a pattern yet, but it could become one. Want to talk through what's getting in the way?",
-          cta: "Talk to Nora",
+          headline: "Two skips in a row, huh?",
+          body: "Not judging. (Okay, slightly judging.) Want to figure out what's actually getting in the way?",
+          cta: "Talk to Be Brilliant →",
         };
         else if (day4Slump) nudge = {
-          headline: "Day 4 is the wall most people hit.",
-          body: "Not because it's harder, because the novelty's gone and the habit isn't locked yet. Nora can help you through it.",
-          cta: "Talk it through",
+          headline: "Day 4. The classic wall.",
+          body: "The excitement wore off and the habit hasn't kicked in yet. This is literally the most important day to show up. Even badly.",
+          cta: "Let's talk it through →",
         };
         else if (week2Drift) nudge = {
-          headline: "Week 2 is where most programs stall.",
-          body: "The first-week momentum has faded and the habit isn't formed yet. This is exactly the moment to check in.",
-          cta: "Check in with Nora",
+          headline: "Week 2. The graveyard of good intentions.",
+          body: "Most programs die right here. Yours doesn't have to. A 2-minute check-in might be all you need.",
+          cta: "Check in with Be Brilliant →",
         };
         else if (streakAtRisk) nudge = {
-          headline: `Your ${streakCount}-day streak is on the line.`,
-          body: "Today's task is waiting. Even 5 minutes keeps the chain alive, Nora can help you figure out how to fit it in.",
-          cta: "Talk to Nora",
+          headline: `${streakCount}-day streak on the line 🔥`,
+          body: "5 minutes. That's all it takes to keep the chain alive. You've come too far to let this one slide.",
+          cta: "Talk to Be Brilliant →",
         };
 
         if (!nudge) return null;
 
         return (
           <div style={{ position: "fixed", bottom: 28, left: "50%", transform: "translateX(-50%)", width: "calc(100% - 32px)", maxWidth: 560, zIndex: 50, boxShadow: "0 8px 40px rgba(26,23,48,0.18)", animation: "fadeIn 0.4s ease" }}>
-            <div style={{ background: "#fff", borderRadius: 20, border: `1px solid #E8E6F2`, padding: "20px 22px", display: "flex", alignItems: "flex-start", gap: 14 }}>
+            <div style={{ background: "#fff", borderRadius: 20, border: `1px solid #E6E4EE`, padding: "20px 22px", display: "flex", alignItems: "flex-start", gap: 14 }}>
               <div style={{ width: 40, height: 40, borderRadius: "50%", background: T.grad, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, marginTop: 2 }}>
-                <span style={{ fontFamily: T.serif, fontSize: 16, color: "#fff", fontStyle: "italic" }}>N</span>
+                <span style={{ fontFamily: T.serif, fontSize: 16, color: "#8B6914", fontStyle: "italic" }}>B</span>
               </div>
               <div style={{ flex: 1 }}>
                 <p style={{ fontFamily: T.sans, fontSize: 14, fontWeight: 700, color: T.black, margin: "0 0 3px" }}>{nudge.headline}</p>
                 <p style={{ fontFamily: T.sans, fontSize: 13, color: T.muted, margin: "0 0 12px", lineHeight: 1.55 }}>{nudge.body}</p>
                 <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                  <button onClick={() => setNoraOpen(true)}
+                  <button onClick={() => setBrilOpen(true)}
                     style={{ background: T.purple, border: "none", borderRadius: 8, padding: "8px 18px", fontFamily: T.sans, fontSize: 13, fontWeight: 600, color: "#fff", cursor: "pointer" }}>
                     {nudge.cta} →
                   </button>
@@ -6430,7 +6446,7 @@ ${timeHint}`;
       })()}
 
       {/* ── MEET NORA, goal clarification prompt on first dashboard open ── */}
-      {storageLoaded && !noraDismissed && highestUnlocked === 1 && !Object.values(Object.fromEntries(Object.entries(dayStatus))).some(s => s === 'done' || s === 'skipped') && (
+      {storageLoaded && !brilDismissed && highestUnlocked === 1 && !Object.values(Object.fromEntries(Object.entries(dayStatus))).some(s => s === 'done' || s === 'skipped') && (
         <div style={{
           position: "fixed", inset: 0, zIndex: 50,
           background: "rgba(10,8,20,0.75)",
@@ -6438,13 +6454,13 @@ ${timeHint}`;
           display: "flex", alignItems: "center", justifyContent: "center",
           padding: "24px 16px",
           animation: "fadeIn 0.35s ease",
-        }} onClick={e => { if (e.target === e.currentTarget) setNoraDismissed(true); }}>
+        }} onClick={e => { if (e.target === e.currentTarget) setBrilDismissed(true); }}>
           <div style={{
             width: "100%", maxWidth: 520,
-            background: "linear-gradient(155deg, #1a1630 0%, #231e3d 55%, #120d26 100%)",
+            background: C.accentLL,
             borderRadius: 24,
-            border: "1px solid rgba(155,143,224,0.25)",
-            boxShadow: "0 32px 80px rgba(0,0,0,0.55), 0 0 0 1px rgba(155,143,224,0.1)",
+            border: `1.5px solid ${C.border}`,
+            boxShadow: "0 32px 80px rgba(232,168,32,0.12), 0 0 0 1px rgba(232,168,32,0.06)",
             overflow: "hidden",
             position: "relative",
           }}>
@@ -6452,81 +6468,81 @@ ${timeHint}`;
             <div style={{
               position: "absolute", top: "-30%", left: "50%", transform: "translateX(-50%)",
               width: 400, height: 300, borderRadius: "50%",
-              background: "radial-gradient(ellipse, rgba(155,143,224,0.15) 0%, transparent 70%)",
+              background: "transparent",
               pointerEvents: "none",
             }} />
 
             {/* Close */}
-            <button onClick={() => setNoraDismissed(true)} style={{
+            <button onClick={() => setBrilDismissed(true)} style={{
               position: "absolute", top: 18, right: 18,
-              background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.1)",
+              background: "rgba(30,30,42,0.05)", border: `1px solid ${C.border}`,
               borderRadius: "50%", width: 28, height: 28,
               display: "flex", alignItems: "center", justifyContent: "center",
-              fontSize: 13, color: "rgba(255,255,255,0.45)", cursor: "pointer", lineHeight: 1,
+              fontSize: 13, color: C.muted, cursor: "pointer", lineHeight: 1,
               zIndex: 10,
             }}>✕</button>
 
             <div style={{ padding: "40px 40px 36px", position: "relative", zIndex: 1 }}>
-              {/* Nora avatar */}
+              {/* Bril avatar */}
               <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 28 }}>
                 <div style={{
                   width: 52, height: 52, borderRadius: "50%",
-                  background: "linear-gradient(135deg, #7c6fd4 0%, #5a4fb5 100%)",
-                  border: "2px solid rgba(155,143,224,0.4)",
+                  background: "#E8A820",
+                  border: "2px solid rgba(232,168,32,0.25)",
                   display: "flex", alignItems: "center", justifyContent: "center",
                   flexShrink: 0,
-                  boxShadow: "0 4px 20px rgba(108,96,194,0.4)",
+                  boxShadow: "0 4px 20px rgba(232,168,32,0.2)",
                 }}>
-                  <span style={{ fontFamily: "Georgia, serif", fontSize: 20, color: "#fff", fontStyle: "italic" }}>N</span>
+                  <span style={{ fontFamily: "'DM Serif Display', Georgia, serif", fontSize: 20, color: "#8B6914", fontStyle: "italic" }}>B</span>
                 </div>
                 <div>
-                  <p style={{ fontFamily: "Inter, sans-serif", fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "rgba(155,143,224,0.7)", margin: "0 0 3px" }}>Meet Nora</p>
-                  <p style={{ fontFamily: "Inter, sans-serif", fontSize: 13, color: "rgba(255,255,255,0.45)", margin: 0, fontWeight: 300 }}>Your thinking partner</p>
+                  <p style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: C.accentD, margin: "0 0 3px" }}>Meet Be Brilliant</p>
+                  <p style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 13, color: C.muted, margin: 0, fontWeight: 400 }}>Your brilliant thinking partner</p>
                 </div>
               </div>
 
               {/* Headline */}
               <h2 style={{
-                fontFamily: "Georgia, 'Times New Roman', serif",
+                fontFamily: "'DM Serif Display', Georgia, serif",
                 fontSize: 26, fontWeight: 400, lineHeight: 1.25,
-                color: "#fff", letterSpacing: "-0.3px",
+                color: C.ink, letterSpacing: "-0.3px",
                 margin: "0 0 16px",
               }}>
-                Before you start, let's make sure your plan is right for you.
+                Quick chat before you start?
               </h2>
 
               {/* Body */}
               <p style={{
-                fontFamily: "Inter, sans-serif", fontSize: 14, fontWeight: 300,
-                color: "rgba(255,255,255,0.55)", lineHeight: 1.75,
+                fontFamily: "'DM Sans', sans-serif", fontSize: 14, fontWeight: 400,
+                color: C.body, lineHeight: 1.75,
                 margin: "0 0 32px",
               }}>
-                Your plan is built on your quiz answers. Nora can make it sharper, clarify what you actually want, adjust the direction, reshape the tasks. Two minutes now means a better program towards your goal.
+                Your plan is based on 7 answers. Be Brilliant can make it sharper in about 2 minutes — clarify what you actually want, tweak the direction, reshape what's coming. Think of it as a quick calibration before the real work starts.
               </p>
 
               {/* CTAs */}
               <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                <button onClick={() => { setNoraDismissed(true); setNoraGoalClarification(true); setNoraOpen(true); }}
+                <button onClick={() => { setBrilDismissed(true); setBrilGoalClarification(true); setBrilOpen(true); }}
                   style={{
-                    width: "100%", background: "#fff", border: "none",
-                    borderRadius: 10, padding: "14px 0",
-                    fontFamily: "Inter, sans-serif", fontSize: 15, fontWeight: 600,
-                    color: "#1a1630", cursor: "pointer",
-                    boxShadow: "0 2px 12px rgba(0,0,0,0.2)",
+                    width: "100%", background: C.accentD, border: "none",
+                    borderRadius: 50, padding: "14px 0",
+                    fontFamily: "'DM Sans', sans-serif", fontSize: 15, fontWeight: 600,
+                    color: "#fff", cursor: "pointer",
+                    boxShadow: "0 4px 16px rgba(232,168,32,0.2)",
                     transition: "transform 0.15s, box-shadow 0.15s",
                   }}
                   onMouseEnter={e => { e.currentTarget.style.transform = "translateY(-1px)"; e.currentTarget.style.boxShadow = "0 6px 20px rgba(0,0,0,0.3)"; }}
                   onMouseLeave={e => { e.currentTarget.style.transform = "translateY(0)"; e.currentTarget.style.boxShadow = "0 2px 12px rgba(0,0,0,0.2)"; }}
                 >
-                  Talk to Nora first →
+                  Talk to Be Brilliant first →
                 </button>
-                <button onClick={() => setNoraDismissed(true)}
+                <button onClick={() => setBrilDismissed(true)}
                   style={{
                     width: "100%", background: "transparent",
-                    border: "1px solid rgba(255,255,255,0.12)",
+                    border: `1px solid ${C.border}`,
                     borderRadius: 10, padding: "13px 0",
-                    fontFamily: "Inter, sans-serif", fontSize: 14, fontWeight: 400,
-                    color: "rgba(255,255,255,0.4)", cursor: "pointer",
+                    fontFamily: "'DM Sans', sans-serif", fontSize: 14, fontWeight: 400,
+                    color: "#5C5C6E", cursor: "pointer",
                   }}>
                   Skip for now
                 </button>
@@ -6538,26 +6554,26 @@ ${timeHint}`;
 
       {/* ── 8-WEEK ARC MODAL ── */}
       {arcOpen && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: "24px 16px" }}
+        <div style={{ position: "fixed", inset: 0, background: "rgba(45,42,62,0.45)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: "24px 16px" }}
           onClick={e => { if (e.target === e.currentTarget) setArcOpen(false); }}>
           <div style={{ width: "100%", maxWidth: 420, background: "#F8F7FC", borderRadius: 24, maxHeight: "88vh", display: "flex", flexDirection: "column", overflow: "hidden", boxShadow: "0 24px 64px rgba(0,0,0,0.25)" }}>
 
             {/* Header */}
             <div style={{ padding: "20px 22px 16px", background: T.grad, borderRadius: "24px 24px 0 0", display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
               <div style={{ flex: 1, minWidth: 0, paddingRight: 12 }}>
-                <p style={{ fontFamily: T.serif, fontSize: 22, fontWeight: 400, color: "#fff", margin: "0 0 8px", lineHeight: 1.2 }}>Goal map</p>
+                <p style={{ fontFamily: T.serif, fontSize: 22, fontWeight: 400, color: T.black, margin: "0 0 8px", lineHeight: 1.2 }}>Goal map</p>
                 {(() => {
                   const rawGoalText = plan._answers?.goal_custom || GOAL_TEXTS[plan._answers?.goal];
-                  const displayGoal = (noraChangeMade && goalStatement) ? goalStatement : rawGoalText;
+                  const displayGoal = (brilChangeMade && goalStatement) ? goalStatement : rawGoalText;
                   return displayGoal ? (
-                    <div style={{ background: "rgba(255,255,255,0.08)", borderRadius: 8, padding: "8px 12px", border: "1px solid rgba(255,255,255,0.12)" }}>
-                      <p style={{ fontFamily: T.sans, fontSize: 10, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", color: "rgba(255,255,255,0.35)", margin: "0 0 3px" }}>12-month goal</p>
-                      <p style={{ fontFamily: T.sans, fontSize: 13, color: "rgba(255,255,255,0.8)", margin: 0, lineHeight: 1.4, fontStyle: "italic" }}>{displayGoal}</p>
+                    <div style={{ background: "rgba(30,30,42,0.04)", borderRadius: 8, padding: "8px 12px", border: `1px solid ${C.border}` }}>
+                      <p style={{ fontFamily: T.sans, fontSize: 10, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", color: "#5C5C6E", margin: "0 0 3px" }}>12-month goal</p>
+                      <p style={{ fontFamily: T.sans, fontSize: 13, color: "#2C2C3A", margin: 0, lineHeight: 1.4, fontStyle: "italic" }}>{displayGoal}</p>
                     </div>
                   ) : null;
                 })()}
               </div>
-              <button onClick={() => setArcOpen(false)} style={{ background: "rgba(255,255,255,0.12)", border: "none", borderRadius: "50%", width: 30, height: 30, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, color: "rgba(255,255,255,0.6)", cursor: "pointer", flexShrink: 0 }}>✕</button>
+              <button onClick={() => setArcOpen(false)} style={{ background: "rgba(255,255,255,0.12)", border: "none", borderRadius: "50%", width: 30, height: 30, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, color: "#4A4A5C", cursor: "pointer", flexShrink: 0 }}>✕</button>
             </div>
 
             {/* Scrollable map */}
@@ -6582,11 +6598,11 @@ ${timeHint}`;
                   const isRight = i % 2 === 0; // even → right side, odd → left side
                   const emoji = WEEK_EMOJIS[i] || "⭐";
 
-                  const nodeColor  = isPast ? "#6C60C2" : isCurr ? "#7c6f9f" : "#C8C4DC";
-                  const nodeBg     = isPast ? "linear-gradient(135deg,#6C60C2,#8B7FD4)" : isCurr ? "linear-gradient(135deg,#7c6f9f,#9B8FD0)" : "#EDE9F8";
+                  const nodeColor  = isPast ? "#E8A820" : isCurr ? "#D49518" : "#C8C4DC";
+                  const nodeBg     = isPast ? "#E8A820" : isCurr ? "#F0C050" : "#F0DEB0";
                   const textColor  = isFut ? T.muted : T.ink;
-                  const numColor   = isPast ? "#6C60C2" : isCurr ? T.purple : T.muted;
-                  const pathColor  = isPast ? "#6C60C2" : "#C8C4DC";
+                  const numColor   = isPast ? "#E8A820" : isCurr ? T.purple : T.muted;
+                  const pathColor  = isPast ? "#E8A820" : "#C8C4DC";
 
                   // The connector SVG sits between this node and the next
                   // Connects from: bottom-centre of current node → top-centre of next node
@@ -6617,7 +6633,7 @@ ${timeHint}`;
                         }}>
                           <p style={{ fontFamily: T.sans, fontSize: 12, fontWeight: 700, color: numColor, margin: "0 0 3px", letterSpacing: 1, textTransform: "uppercase" }}>Week {w}</p>
                           <p style={{ fontFamily: T.sans, fontSize: 14, color: textColor, margin: 0, lineHeight: 1.4, fontWeight: isCurr ? 600 : 400 }}>{theme}</p>
-                          {isPast && <p style={{ fontFamily: T.sans, fontSize: 12, color: "#6C60C2", margin: "4px 0 0", fontWeight: 600 }}>{wDone}/7 ✓</p>}
+                          {isPast && <p style={{ fontFamily: T.sans, fontSize: 12, color: "#E8A820", margin: "4px 0 0", fontWeight: 600 }}>{wDone}/7 ✓</p>}
                           {isCurr && <p style={{ fontFamily: T.sans, fontSize: 12, color: T.purple, margin: "4px 0 0", fontWeight: 600 }}>You are here · {wDone}/7</p>}
                         </div>
 
@@ -6625,14 +6641,14 @@ ${timeHint}`;
                         <div style={{
                           width: 64, height: 64, borderRadius: "50%",
                           background: nodeBg,
-                          border: isCurr ? `3px solid ${T.purple}` : isPast ? "3px solid #6C60C2" : `2px solid ${nodeColor}`,
+                          border: isCurr ? `3px solid ${T.purple}` : isPast ? "3px solid #E8A820" : `2px solid ${nodeColor}`,
                           display: "flex", alignItems: "center", justifyContent: "center",
                           flexShrink: 0, position: "relative", zIndex: 2,
-                          boxShadow: isCurr ? `0 0 0 5px rgba(124,111,159,0.2), 0 4px 16px rgba(108,96,194,0.3)` : isPast ? "0 2px 8px rgba(108,96,194,0.2)" : "none",
+                          boxShadow: isCurr ? `0 0 0 5px rgba(124,111,159,0.2), 0 4px 16px rgba(232,168,32,0.15)` : isPast ? "0 2px 8px rgba(232,168,32,0.12)" : "none",
                           order: isRight ? 2 : 1,
                         }}>
                           {isPast
-                            ? <span style={{ fontSize: 24, color: "#fff", fontWeight: 700 }}>✓</span>
+                            ? <span style={{ fontSize: 24, color: "#1E1E2A", fontWeight: 700 }}>✓</span>
                             : <span style={{ fontSize: isCurr ? 26 : 20, filter: isFut ? "grayscale(0.5) opacity(0.5)" : "none" }}>{emoji}</span>
                           }
                         </div>
@@ -6706,7 +6722,7 @@ ${timeHint}`;
                 </div>
                 <p style={{ fontFamily: T.serif, fontSize: 16, color: T.black, margin: "0 0 4px", fontWeight: 400 }}>12-month goal</p>
                 <p style={{ fontFamily: T.sans, fontSize: 13, color: T.body, margin: 0, lineHeight: 1.5, maxWidth: 260, marginLeft: "auto", marginRight: "auto" }}>
-                  {(() => { const g = plan._answers?.goal_custom || GOAL_TEXTS[plan._answers?.goal]; return (noraChangeMade && goalStatement) ? goalStatement : g; })()}
+                  {(() => { const g = plan._answers?.goal_custom || GOAL_TEXTS[plan._answers?.goal]; return (brilChangeMade && goalStatement) ? goalStatement : g; })()}
                 </p>
               </div>
             </div>
@@ -6716,20 +6732,20 @@ ${timeHint}`;
 
       {/* ── PROGRESS MODAL ── */}
       {progressOpen && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: "24px 16px" }}
+        <div style={{ position: "fixed", inset: 0, background: "rgba(45,42,62,0.45)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: "24px 16px" }}
           onClick={e => { if (e.target === e.currentTarget) setProgressOpen(false); }}>
           <div style={{ width: "100%", maxWidth: 600, background: "#fff", borderRadius: 20, maxHeight: "85vh", display: "flex", flexDirection: "column", overflow: "hidden" }}>
             {/* Header */}
             <div style={{ padding: "18px 20px 14px", background: T.grad, borderRadius: "20px 20px 0 0", display: "flex", alignItems: "flex-start", justifyContent: "space-between", flexShrink: 0 }}>
               <div>
-                <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", color: "rgba(255,255,255,0.45)", margin: "0 0 4px" }}>Your progress</p>
+                <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", color: "#5C5C6E", margin: "0 0 4px" }}>Your progress</p>
                 {(() => {
                   const goalTexts = GOAL_TEXTS;
                   const goalText = plan._answers?.goal_custom || goalTexts[plan._answers?.goal];
-                  return goalText ? <p style={{ fontFamily: T.serif, fontSize: 16, color: "#fff", margin: 0, lineHeight: 1.4, fontStyle: "italic", fontWeight: 400 }}>{goalText}</p> : null;
+                  return goalText ? <p style={{ fontFamily: T.serif, fontSize: 16, color: T.purpleD, margin: 0, lineHeight: 1.4, fontStyle: "italic", fontWeight: 400 }}>{goalText}</p> : null;
                 })()}
               </div>
-              <button onClick={() => setProgressOpen(false)} style={{ background: "none", border: "none", fontSize: 20, color: "rgba(255,255,255,0.4)", cursor: "pointer", padding: "0 0 0 12px", lineHeight: 1, flexShrink: 0 }}>×</button>
+              <button onClick={() => setProgressOpen(false)} style={{ background: "none", border: "none", fontSize: 20, color: "#5C5C6E", cursor: "pointer", padding: "0 0 0 12px", lineHeight: 1, flexShrink: 0 }}>×</button>
             </div>
 
             <div style={{ flex: 1, overflowY: "auto", padding: "20px 20px 32px" }}>
@@ -6768,7 +6784,7 @@ ${timeHint}`;
                     ))}
                   </div>
                   {/* Acts highlight in progress modal */}
-                  <div style={{ background: "linear-gradient(135deg, #1e1a2e 0%, #2d2650 100%)", borderRadius: 14, padding: "18px 20px", marginBottom: 24, display: "flex", alignItems: "center", gap: 16, border: "1px solid rgba(155,143,224,0.3)" }}>
+                  <div style={{ background: "#F0DCA0", borderRadius: 14, padding: "18px 20px", border: "1px solid rgba(139,105,20,0.25)", marginBottom: 24, display: "flex", alignItems: "center", gap: 16 }}>
                     <svg width="44" height="32" viewBox="0 0 48 32" fill="none" xmlns="http://www.w3.org/2000/svg">
                       <ellipse cx="24" cy="27" rx="13" ry="4.5" fill="#92640a" stroke="#c8860e" strokeWidth="1"/>
                       <rect x="11" y="20" width="26" height="7" fill="#92640a"/>
@@ -6782,9 +6798,9 @@ ${timeHint}`;
                       <ellipse cx="20" cy="1.2" rx="5" ry="1.5" fill="rgba(255,255,255,0.22)" transform="rotate(-10 20 1.2)"/>
                     </svg>
                     <div>
-                      <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", color: "rgba(240,180,41,0.8)", margin: "0 0 3px" }}>Total Creds</p>
-                      <p style={{ fontFamily: T.serif, fontSize: 34, fontWeight: 400, color: "#fad568", margin: 0, lineHeight: 1 }}>{cashPot} <span style={{ fontSize: 18, fontWeight: 300, opacity: 0.6 }}>Cr</span></p>
-                      <p style={{ fontFamily: T.sans, fontSize: 12, color: "rgba(255,255,255,0.4)", margin: "4px 0 0", lineHeight: 1.5 }}>Each completed day moves you forward. These add up.</p>
+                      <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", color: "#8B6914", margin: "0 0 3px" }}>Total Creds</p>
+                      <p style={{ fontFamily: T.serif, fontSize: 34, fontWeight: 400, color: "#6B4F0A", margin: 0, lineHeight: 1 }}>{cashPot} <span style={{ fontSize: 18, fontWeight: 300, opacity: 0.6 }}>Cr</span></p>
+                      <p style={{ fontFamily: T.sans, fontSize: 12, color: "#5C4A20", margin: "4px 0 0", lineHeight: 1.5 }}>Each completed day moves you forward. These add up.</p>
                     </div>
                   </div>
                   </>
@@ -6844,7 +6860,7 @@ ${timeHint}`;
                                   position: "absolute",
                                   bottom: 0, left: 0, right: 0,
                                   height: fillH,
-                                  background: `linear-gradient(180deg, ${color}40 0%, ${color}88 100%)`,
+                                  background: `${color}66`,
                                   borderRadius: "2px 2px 5px 5px",
                                   transition: "height 0.6s cubic-bezier(0.34,1.56,0.64,1)",
                                 }}>
@@ -6901,7 +6917,7 @@ ${timeHint}`;
 
               {/* ── ACHIEVEMENTS ── */}
               {(() => {
-                const ctx = { dayStatus, dayTasks, streakCount, noraChangeMade, noraPickDay };
+                const ctx = { dayStatus, dayTasks, streakCount, brilChangeMade, brilPickDay };
                 return (
                   <div style={{ marginBottom: 24 }}>
                     <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", color: T.muted, margin: "0 0 12px" }}>Achievements</p>
@@ -6993,7 +7009,7 @@ ${timeHint}`;
           if (remainingDays.length > 0) {
             const newTasks = {};
             for (const d of remainingDays) {
-              const t = await generateNextDayTask(updatedPlan, d - 1, dayStatus[d-1] || 'done', dayNotes[d-1] || "", noraInsight, dayTasks, dayStatus, dayNotes);
+              const t = await generateNextDayTask(updatedPlan, d - 1, dayStatus[d-1] || 'done', dayNotes[d-1] || "", brilInsight, dayTasks, dayStatus, dayNotes);
               if (t) newTasks[d] = t;
             }
             setDayTasks(prev => ({ ...prev, ...newTasks }));
@@ -7003,7 +7019,7 @@ ${timeHint}`;
         };
 
         return (
-          <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(0,0,0,0.55)", zIndex: 100, display: "flex", alignItems: "flex-end", justifyContent: "center" }}
+          <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(45,42,62,0.45)", zIndex: 100, display: "flex", alignItems: "flex-end", justifyContent: "center" }}
             onClick={e => { if (e.target === e.currentTarget) setShowGoalEdit(false); }}>
             <div style={{ background: "#fff", borderRadius: "16px 16px 0 0", padding: "28px 24px 40px", width: "100%", maxWidth: 600, maxHeight: "85vh", overflowY: "auto" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 }}>
@@ -7063,7 +7079,7 @@ ${timeHint}`;
 
       {/* ── GOAL UPDATING BANNER ── */}
       {goalUpdating && (
-        <div style={{ position: "fixed", bottom: 24, left: "50%", transform: "translateX(-50%)", background: T.black, color: "#fff", fontFamily: T.sans, fontSize: 14, padding: "12px 20px", borderRadius: 10, zIndex: 99, boxShadow: "0 4px 20px rgba(0,0,0,0.2)" }}>
+        <div style={{ position: "fixed", bottom: 24, left: "50%", transform: "translateX(-50%)", background: T.purple, color: "#fff", fontFamily: T.sans, fontSize: 14, padding: "12px 20px", borderRadius: 10, zIndex: 99, boxShadow: "0 4px 20px rgba(0,0,0,0.2)" }}>
           Reshaping your remaining tasks...
         </div>
       )}
@@ -7101,7 +7117,7 @@ ${timeHint}`;
                 100% { transform: scale(1) rotate(0deg); opacity: 1; }
               }
               @keyframes achievementGlow {
-                0%, 100% { box-shadow: 0 0 40px 8px rgba(155,143,224,0.35), 0 0 0 0 rgba(155,143,224,0.15); }
+                0%, 100% { box-shadow: 0 0 40px 8px rgba(155,143,224,0.35), 0 0 0 0 rgba(232,168,32,0.1); }
                 50%       { box-shadow: 0 0 80px 24px rgba(155,143,224,0.55), 0 0 0 40px rgba(155,143,224,0); }
               }
               @keyframes achievementShine {
@@ -7148,7 +7164,7 @@ ${timeHint}`;
             {/* Main card */}
             <div style={{
               width: "100%", maxWidth: 440,
-              background: "linear-gradient(155deg, #1a1630 0%, #231e3d 55%, #120d26 100%)",
+              background: C.accentLL,
               borderRadius: 28,
               border: "1.5px solid rgba(155,143,224,0.35)",
               padding: "48px 36px 40px",
@@ -7160,7 +7176,7 @@ ${timeHint}`;
               {/* Shine sweep */}
               <div style={{
                 position: "absolute", top: 0, bottom: 0, width: "40%",
-                background: "linear-gradient(90deg, transparent, rgba(255,255,255,0.06), transparent)",
+                background: "transparent",
                 animation: "achievementShine 1.8s ease 0.5s 2",
                 pointerEvents: "none",
               }} />
@@ -7169,7 +7185,7 @@ ${timeHint}`;
               <div style={{
                 position: "absolute", top: "-40%", left: "50%", transform: "translateX(-50%)",
                 width: 360, height: 280, borderRadius: "50%",
-                background: "radial-gradient(ellipse, rgba(155,143,224,0.22) 0%, transparent 70%)",
+                background: "transparent",
                 pointerEvents: "none",
               }} />
 
@@ -7202,17 +7218,17 @@ ${timeHint}`;
               {/* Desc */}
               <p style={{
                 fontFamily: T.sans, fontSize: 16, fontWeight: 300,
-                color: "rgba(255,255,255,0.55)", lineHeight: 1.65,
+                color: "#4A4A5C", lineHeight: 1.65,
                 margin: "0 0 32px",
                 position: "relative", zIndex: 1,
               }}>{a.desc}</p>
 
               {/* Divider line */}
-              <div style={{ height: 1, background: "rgba(255,255,255,0.08)", margin: "0 0 20px", position: "relative", zIndex: 1 }} />
+              <div style={{ height: 1, background: "rgba(30,30,42,0.04)", margin: "0 0 20px", position: "relative", zIndex: 1 }} />
 
               {/* Tap to continue */}
               <p style={{
-                fontFamily: T.sans, fontSize: 13, color: "rgba(255,255,255,0.35)",
+                fontFamily: T.sans, fontSize: 13, color: "#5C5C6E",
                 margin: 0, letterSpacing: "0.05em",
                 animation: "achievementTapHint 1.8s ease-in-out infinite",
                 position: "relative", zIndex: 1,
@@ -7241,7 +7257,7 @@ ${timeHint}`;
         return (
           <div style={{
             position: "fixed", inset: 0, zIndex: 300,
-            background: "linear-gradient(155deg, #0e0c1f 0%, #1e1a35 55%, #0a0818 100%)",
+            background: "#2C2820",
             display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
             padding: "24px 20px",
             overflow: "hidden",
@@ -7284,7 +7300,7 @@ ${timeHint}`;
                 <div style={{
                   width: 64, height: 64, borderRadius: "50%",
                   background: "rgba(155,143,224,0.18)",
-                  border: "2px solid rgba(155,143,224,0.4)",
+                  border: "2px solid rgba(232,168,32,0.25)",
                   display: "flex", alignItems: "center", justifyContent: "center",
                   animation: "starPop 0.5s cubic-bezier(0.22,1,0.36,1) 0.1s both",
                 }}>
@@ -7295,7 +7311,7 @@ ${timeHint}`;
               </div>
 
               {/* Day done headline */}
-              <p style={{ fontFamily: T.sans, fontSize: 12, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", color: "rgba(155,143,224,0.6)", margin: "0 0 8px" }}>
+              <p style={{ fontFamily: T.sans, fontSize: 12, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", color: "rgba(184,175,236,0.8)", margin: "0 0 8px" }}>
                 Day {cm_dayNum} complete
               </p>
               <h2 style={{ fontFamily: T.serif, fontSize: 36, fontWeight: 400, color: "#fff", margin: "0 0 6px", letterSpacing: "-0.5px", lineHeight: 1.1 }}>
@@ -7304,7 +7320,7 @@ ${timeHint}`;
 
               {/* Only show streak at meaningful milestones: 3, 7, 14, 21, 30 */}
               {[3, 7, 14, 21, 30].includes(cm_streak) ? (
-                <p style={{ fontFamily: T.sans, fontSize: 15, color: "rgba(255,255,255,0.55)", margin: "0 0 20px" }}>
+                <p style={{ fontFamily: T.sans, fontSize: 15, color: "rgba(255,255,255,0.6)", margin: "0 0 20px" }}>
                   🔥 {cm_streak}-day streak
                 </p>
               ) : <div style={{ height: 20 }} />}
@@ -7352,7 +7368,7 @@ ${timeHint}`;
                 </button>
               )}
               <button onClick={closeCelebration}
-                style={{ background: "none", border: "none", fontFamily: T.sans, fontSize: 13, color: "rgba(255,255,255,0.28)", cursor: "pointer", padding: "4px 0" }}>
+                style={{ background: "none", border: "none", fontFamily: T.sans, fontSize: 13, color: "rgba(255,255,255,0.45)", cursor: "pointer", padding: "4px 0" }}>
                 Back to dashboard
               </button>
             </div>
@@ -7369,7 +7385,7 @@ ${timeHint}`;
         return (
           <div style={{
             position: "fixed", inset: 0, zIndex: 310,
-            background: "linear-gradient(155deg, #0a0818 0%, #160f28 55%, #0e0c1f 100%)",
+            background: "#2C2820",
             display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
             padding: "24px 20px", overflow: "hidden",
           }}>
@@ -7389,7 +7405,7 @@ ${timeHint}`;
               <div style={{ display: "flex", justifyContent: "center", marginBottom: 28 }}>
                 <div style={{
                   width: 80, height: 80, borderRadius: "50%",
-                  background: `radial-gradient(circle at 38% 36%, ${accent}33 0%, ${accent}11 100%)`,
+                  background: `${accent}22`,
                   border: `2px solid ${accent}66`,
                   display: "flex", alignItems: "center", justifyContent: "center",
                   boxShadow: `0 0 32px ${accent}44`,
@@ -7416,7 +7432,7 @@ ${timeHint}`;
               </h2>
 
               {/* Total */}
-              <p style={{ fontFamily: T.sans, fontSize: 14, color: "rgba(255,255,255,0.38)", margin: "0 0 22px", letterSpacing: 0.3 }}>
+              <p style={{ fontFamily: T.sans, fontSize: 14, color: "rgba(255,255,255,0.5)", margin: "0 0 22px", letterSpacing: 0.3 }}>
                 {total} Creds earned
               </p>
 
@@ -7467,10 +7483,10 @@ ${timeHint}`;
         return (
           <div style={{ position: "fixed", inset: 0, background: "rgba(8,6,20,0.8)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center", padding: "24px 16px", backdropFilter: "blur(8px)", animation: "fadeIn 0.25s ease" }}
             onClick={e => { if (e.target === e.currentTarget) setShowCredsLog(false); }}>
-            <div style={{ width: "100%", maxWidth: 560, background: "linear-gradient(175deg, #1a1630 0%, #231e3d 100%)", borderRadius: 20, border: "1px solid rgba(155,143,224,0.2)", maxHeight: "85vh", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+            <div style={{ width: "100%", maxWidth: 560, background: C.accentLL, borderRadius: 20, border: "1px solid rgba(232,168,32,0.15)", maxHeight: "85vh", display: "flex", flexDirection: "column", overflow: "hidden" }}>
 
               {/* Header */}
-              <div style={{ padding: "22px 24px 16px", borderBottom: "1px solid rgba(255,255,255,0.07)", display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0 }}>
+              <div style={{ padding: "22px 24px 16px", borderBottom: "1px solid rgba(139,105,20,0.15)", display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
                   <svg width="40" height="30" viewBox="0 0 48 32" fill="none">
                     <ellipse cx="24" cy="27" rx="13" ry="4.5" fill="#92640a" stroke="#c8860e" strokeWidth="1"/>
@@ -7485,38 +7501,38 @@ ${timeHint}`;
                     <ellipse cx="20" cy="1.2" rx="5" ry="1.5" fill="rgba(255,255,255,0.22)" transform="rotate(-10 20 1.2)"/>
                   </svg>
                   <div>
-                    <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", color: "rgba(155,143,224,0.65)", margin: 0 }}>Your Creds</p>
-                    <p style={{ fontFamily: T.serif, fontSize: 28, fontWeight: 400, color: "#B8AFEC", margin: 0, lineHeight: 1.1 }}>{cashPot} <span style={{ fontSize: 16, fontWeight: 300, opacity: 0.55 }}>Cr</span></p>
+                    <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", color: "#8B6914", margin: 0 }}>Your Creds</p>
+                    <p style={{ fontFamily: T.serif, fontSize: 28, fontWeight: 400, color: "#5C4A20", margin: 0, lineHeight: 1.1 }}>{cashPot} <span style={{ fontSize: 16, fontWeight: 300, opacity: 0.55 }}>Cr</span></p>
                   </div>
                 </div>
-                <button onClick={() => setShowCredsLog(false)} style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "50%", width: 30, height: 30, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, color: "rgba(255,255,255,0.45)", cursor: "pointer" }}>✕</button>
+                <button onClick={() => setShowCredsLog(false)} style={{ background: "rgba(30,30,42,0.03)", border: `1px solid ${C.border}`, borderRadius: "50%", width: 30, height: 30, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, color: "#5C5C6E", cursor: "pointer" }}>✕</button>
               </div>
 
               <div style={{ flex: 1, overflowY: "auto", padding: "18px 24px 32px" }}>
 
                 {/* Next milestone */}
                 {nextMilestone && (
-                  <div style={{ marginBottom: 20, padding: "12px 16px", background: "rgba(155,143,224,0.1)", borderRadius: 12, border: "1px solid rgba(155,143,224,0.18)" }}>
+                  <div style={{ marginBottom: 20, padding: "12px 16px", background: "rgba(232,168,32,0.1)", borderRadius: 12, border: "1px solid rgba(139,105,20,0.18)" }}>
                     <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 7 }}>
-                      <p style={{ fontFamily: T.sans, fontSize: 12, color: "rgba(255,255,255,0.5)", margin: 0 }}>Next milestone</p>
-                      <p style={{ fontFamily: T.sans, fontSize: 12, fontWeight: 700, color: "#B8AFEC", margin: 0 }}>{cashPot} / {nextMilestone} Cr</p>
+                      <p style={{ fontFamily: T.sans, fontSize: 12, color: "#5C5C6E", margin: 0 }}>Next milestone</p>
+                      <p style={{ fontFamily: T.sans, fontSize: 12, fontWeight: 700, color: "#6B4F0A", margin: 0 }}>{cashPot} / {nextMilestone} Cr</p>
                     </div>
-                    <div style={{ height: 5, borderRadius: 3, background: "rgba(255,255,255,0.08)", overflow: "hidden" }}>
-                      <div style={{ height: "100%", width: `${Math.min(100, (cashPot / nextMilestone) * 100)}%`, background: "linear-gradient(90deg, #7B6FCC, #B0A8F0)", borderRadius: 3, transition: "width 0.5s ease" }} />
+                    <div style={{ height: 5, borderRadius: 3, background: "rgba(30,30,42,0.04)", overflow: "hidden" }}>
+                      <div style={{ height: "100%", width: `${Math.min(100, (cashPot / nextMilestone) * 100)}%`, background: "#E8A820", borderRadius: 3, transition: "width 0.5s ease" }} />
                     </div>
-                    <p style={{ fontFamily: T.sans, fontSize: 11, color: "rgba(255,255,255,0.3)", margin: "6px 0 0" }}>{nextMilestone - cashPot} Cr to go</p>
+                    <p style={{ fontFamily: T.sans, fontSize: 11, color: "#6E6E80", margin: "6px 0 0" }}>{nextMilestone - cashPot} Cr to go</p>
                   </div>
                 )}
 
                 {/* Breakdown by task type */}
                 {Object.keys(byType).length > 0 && (
                   <div style={{ marginBottom: 20 }}>
-                    <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "rgba(255,255,255,0.28)", margin: "0 0 10px" }}>How you earned them</p>
+                    <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "#7E7E90", margin: "0 0 10px" }}>How you earned them</p>
                     <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                       {Object.entries(byType).sort((a,b)=>b[1]-a[1]).map(([tag, total]) => (
-                        <div key={tag} style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 12px", background: "rgba(255,255,255,0.05)", borderRadius: 8, border: "1px solid rgba(255,255,255,0.07)" }}>
+                        <div key={tag} style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 12px", background: "rgba(139,105,20,0.08)", borderRadius: 8, border: "1px solid rgba(139,105,20,0.15)" }}>
                           <span style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, padding: "2px 7px", background: tagBgs5[tag], color: tagColors5[tag], borderRadius: 3 }}>{tag}</span>
-                          <span style={{ fontFamily: T.sans, fontSize: 13, fontWeight: 700, color: "#B8AFEC" }}>{total} Cr</span>
+                          <span style={{ fontFamily: T.sans, fontSize: 13, fontWeight: 700, color: "#5C4A20" }}>{total} Cr</span>
                         </div>
                       ))}
                     </div>
@@ -7524,30 +7540,30 @@ ${timeHint}`;
                 )}
 
                 {/* Per-day log */}
-                <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "rgba(255,255,255,0.28)", margin: "0 0 10px" }}>
+                <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "#7E7E90", margin: "0 0 10px" }}>
                   {log.length > 0 ? "Recent earnings" : "No Acts yet — complete your first day to start earning."}
                 </p>
                 <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
                   {log.slice().reverse().slice(0, 14).map(entry => (
-                    <div key={entry.day} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", background: "rgba(255,255,255,0.04)", borderRadius: 10, border: "1px solid rgba(255,255,255,0.06)" }}>
-                      <div style={{ width: 32, height: 32, borderRadius: 8, background: "rgba(155,143,224,0.12)", border: "1px solid rgba(155,143,224,0.2)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                        <span style={{ fontFamily: T.sans, fontSize: 10, fontWeight: 700, color: "#B8AFEC" }}>{entry.day}</span>
+                    <div key={entry.day} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", background: "rgba(139,105,20,0.06)", borderRadius: 10, border: "1px solid rgba(139,105,20,0.1)" }}>
+                      <div style={{ width: 32, height: 32, borderRadius: 8, background: "rgba(232,168,32,0.12)", border: "1px solid rgba(232,168,32,0.2)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                        <span style={{ fontFamily: T.sans, fontSize: 10, fontWeight: 700, color: "#6B4F0A" }}>{entry.day}</span>
                       </div>
                       <div style={{ flex: 1, minWidth: 0 }}>
-                        <p style={{ fontFamily: T.sans, fontSize: 13, color: "rgba(255,255,255,0.75)", margin: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        <p style={{ fontFamily: T.sans, fontSize: 13, color: "#3A3220", margin: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                           {entry.title || `Day ${entry.day} completed`}
                         </p>
                         {entry.bonus > 0 && (
-                          <p style={{ fontFamily: T.sans, fontSize: 11, color: "rgba(155,143,224,0.6)", margin: "2px 0 0" }}>+{entry.bonus} streak bonus</p>
+                          <p style={{ fontFamily: T.sans, fontSize: 11, color: "#8B6914", margin: "2px 0 0" }}>+{entry.bonus} streak bonus</p>
                         )}
                       </div>
-                      <p style={{ fontFamily: T.sans, fontSize: 14, fontWeight: 800, color: "#B8AFEC", margin: 0, flexShrink: 0 }}>+{entry.total}</p>
+                      <p style={{ fontFamily: T.sans, fontSize: 14, fontWeight: 800, color: "#6B4F0A", margin: 0, flexShrink: 0 }}>+{entry.total}</p>
                     </div>
                   ))}
                 </div>
 
                 {log.length === 0 && (
-                  <p style={{ fontFamily: T.sans, fontSize: 14, color: "rgba(255,255,255,0.3)", margin: "8px 0 0", lineHeight: 1.6 }}>
+                  <p style={{ fontFamily: T.sans, fontSize: 14, color: "#6E6E80", margin: "8px 0 0", lineHeight: 1.6 }}>
                     Creds accumulate as you complete days. Tool tasks earn the most (8 Creds). Streak bonuses kick in from day 3.
                   </p>
                 )}
@@ -7558,8 +7574,8 @@ ${timeHint}`;
       })()}
 
       {/* ── NORA MODAL ── */}
-      {noraOpen && (
-        <NoraChatModal
+      {brilOpen && (
+        <BrilChatModal
           plan={plan}
           dayTasks={dayTasks}
           dayStatus={dayStatus}
@@ -7570,20 +7586,20 @@ ${timeHint}`;
           goalStatement={goalStatement}
           momentumScore={momentumScore}
           momentumLabel={momentumLabel}
-          noraSessionLog={noraSessionLog}
+          brilSessionLog={brilSessionLog}
           currentDay={highestUnlocked}
-          isGoalClarification={noraGoalClarification}
-          onClose={() => { setNoraOpen(false); setNoraGoalClarification(false); }}
+          isGoalClarification={brilGoalClarification}
+          onClose={() => { setBrilOpen(false); setBrilGoalClarification(false); }}
           onInsight={async (text, cmds = {}) => {
-            setNoraInsight(text);
+            setBrilInsight(text);
             if (cmds.slowDown) setPaceSlow(true);
 
-            // ── Score the Nora conversation for momentum points ──
+            // ── Score the Bril conversation for momentum points ──
             // Fire-and-forget: ask Claude to evaluate the interaction value
             (async () => {
               try {
                 const hasChange = !!(cmds.weekGoal || cmds.changeGoal !== undefined || cmds.changeGoalCustom || cmds.requestedTask || cmds.slowDown || cmds.rebuildWeek);
-                const prompt = `Rate the quality of this Nora coaching interaction for a career development program. Score 1-10 based on: depth of insight shared, whether a meaningful change was made, and how much it will improve the person's program.
+                const prompt = `Rate the quality of this Be Brilliant coaching interaction for a career development program. Score 1-10 based on: depth of insight shared, whether a meaningful change was made, and how much it will improve the person's program.
 
 Interaction summary: "${text?.slice(0, 400) || "brief exchange"}"
 Program change made: ${hasChange ? "yes" : "no"}
@@ -7598,8 +7614,8 @@ Return ONLY valid JSON: {"score": N, "reason": "one short sentence"}`;
                 const data = await res.json();
                 const raw = (data.content || []).map(b => b.text || "").join("").trim();
                 const parsed = JSON.parse(raw.replace(/```json|```/g, "").trim());
-                const pts = Math.round((parsed.score / 10) * 8); // max +8 pts from Nora
-                if (pts > 0) setNoraMomentumBonus(prev => Math.min(prev + pts, 20)); // cap Nora bonus at 20 total
+                const pts = Math.round((parsed.score / 10) * 8); // max +8 pts from Bril
+                if (pts > 0) setBrilMomentumBonus(prev => Math.min(prev + pts, 20)); // cap Bril bonus at 20 total
               } catch (e) { /* silent fail */ }
             })();
 
@@ -7626,7 +7642,7 @@ Return ONLY valid JSON: {"score": N, "reason": "one short sentence"}`;
               const targetDay = cmds.replaceDayN;
               if (targetDay >= 1 && targetDay <= 56 && targetDay <= highestUnlocked && !dayStatus[targetDay]) {
                 setGoalUpdating(true);
-                setNoraPickDay(targetDay);
+                setBrilPickDay(targetDay);
                 const hint = `REPLACE DAY ${targetDay} TASK: ${cmds.replaceDayTask}. Build the task directly around this.`;
                 const t = await generateNextDayTask(plan, targetDay - 1, dayStatus[targetDay - 1] || 'done', hint, text, dayTasks, dayStatus, dayNotes);
                 if (t) setDayTasks(prev => ({ ...prev, [targetDay]: t }));
@@ -7638,7 +7654,7 @@ Return ONLY valid JSON: {"score": N, "reason": "one short sentence"}`;
               setPlanState(prev => ({ ...prev, _answers: { ...prev._answers, goal_custom: cmds.changeGoalCustom, goal_detail: undefined } }));
               setGoalUpdatedDay(highestUnlocked);
               setGoalStatement("");
-              setNoraChangeMade(true);
+              setBrilChangeMade(true);
               await regenRemainingDays(text);
               generateGoalStatement(plan, dayTasks, dayStatus, dayNotes).then(s => { if (s) setGoalStatement(s); });
             }
@@ -7655,12 +7671,12 @@ Return ONLY valid JSON: {"score": N, "reason": "one short sentence"}`;
               }
               setDayTasks(prev => ({ ...prev, ...newTasks }));
               setGoalUpdating(false);
-              setNoraChangeMade(true);
+              setBrilChangeMade(true);
             }
 
             if (cmds.weekGoal) {
               setWeekGoalOverride(cmds.weekGoal);
-              setNoraChangeMade(true);
+              setBrilChangeMade(true);
               await regenRemainingDays(text);
             }
 
@@ -7668,7 +7684,7 @@ Return ONLY valid JSON: {"score": N, "reason": "one short sentence"}`;
               setPlanState(prev => ({ ...prev, _answers: { ...prev._answers, goal: cmds.changeGoal, goal_detail: undefined } }));
               setGoalUpdatedDay(highestUnlocked);
               setGoalStatement("");
-              setNoraChangeMade(true);
+              setBrilChangeMade(true);
               await regenRemainingDays(text);
               generateGoalStatement(plan, dayTasks, dayStatus, dayNotes).then(s => { if (s) setGoalStatement(s); });
             }
@@ -7678,7 +7694,7 @@ Return ONLY valid JSON: {"score": N, "reason": "one short sentence"}`;
               const todayNum = highestUnlocked;
               if (todayNum <= 56 && !dayStatus[todayNum]) {
                 setGoalUpdating(true);
-                setNoraPickDay(todayNum);
+                setBrilPickDay(todayNum);
                 const specificHint = `REPLACE TODAY'S TASK: ${cmds.replaceTodayTask}. Build the task directly around this.`;
                 const t = await generateNextDayTask(plan, todayNum - 1, dayStatus[todayNum - 1] || 'done', specificHint, text, dayTasks, dayStatus, dayNotes);
                 if (t) setDayTasks(prev => ({ ...prev, [todayNum]: t }));
@@ -7690,7 +7706,7 @@ Return ONLY valid JSON: {"score": N, "reason": "one short sentence"}`;
               const targetDay = dayStatus[highestUnlocked] ? highestUnlocked + 1 : highestUnlocked;
               if (targetDay <= 56) {
                 setGoalUpdating(true);
-                setNoraPickDay(targetDay);
+                setBrilPickDay(targetDay);
                 const specificHint = `SPECIFIC REQUEST: ${cmds.requestedTask}. Build the task directly around this.`;
                 const t = await generateNextDayTask(plan, targetDay - 1, dayStatus[targetDay - 1] || 'done', specificHint, text, dayTasks, dayStatus, dayNotes);
                 if (t) setDayTasks(prev => ({ ...prev, [targetDay]: t }));
@@ -7698,7 +7714,7 @@ Return ONLY valid JSON: {"score": N, "reason": "one short sentence"}`;
               }
             }
 
-            setNoraOpen(false);
+            setBrilOpen(false);
 
             // ── Generate and store session summary (fire-and-forget) ──
             (async () => {
@@ -7714,7 +7730,7 @@ Return ONLY valid JSON: {"score": N, "reason": "one short sentence"}`;
                   cmds.slowDown ? "Requested slower pace" : null,
                 ].filter(Boolean);
 
-                const summaryPrompt = `Summarize this Nora coaching session in 2-3 sentences. Focus on: what the person was working through, any blockers or concerns they raised, what was resolved or shifted. Be specific, this summary will inform future task generation and coaching for this person.
+                const summaryPrompt = `Summarize this Be Brilliant coaching session in 2-3 sentences. Focus on: what the person was working through, any blockers or concerns they raised, what was resolved or shifted. Be specific, this summary will inform future task generation and coaching for this person.
 
 Session content: "${text?.slice(0, 600) || "brief exchange"}"
 Program changes made: ${changes.length ? changes.join("; ") : "none"}
@@ -7729,7 +7745,7 @@ Write the summary in third person ("They were working on...", "They mentioned...
                 const data = await res.json();
                 const summary = (data.content || []).map(b => b.text || "").join("").trim();
                 if (summary) {
-                  setNoraSessionLog(prev => [...prev.slice(-6), { // keep last 7 sessions
+                  setBrilSessionLog(prev => [...prev.slice(-6), { // keep last 7 sessions
                     dayNum: highestUnlocked,
                     summary,
                     changes,
@@ -7746,7 +7762,7 @@ Write the summary in third person ("They were working on...", "They mentioned...
       {!paywallBypassed && doneCount >= 2 && activeDay >= 3 && !celebrationModal && (
         <div style={{
           position: "fixed", inset: 0, zIndex: 400,
-          background: "linear-gradient(155deg, #0e0c1f 0%, #1e1a35 55%, #0a0818 100%)",
+          background: "#2C2820",
           display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
           padding: "24px 16px", overflow: "auto",
         }}>
@@ -7755,20 +7771,20 @@ Write the summary in third person ("They were working on...", "They mentioned...
             <div style={{ display: "flex", justifyContent: "center", marginBottom: 20 }}>
               <div style={{
                 width: 64, height: 64, borderRadius: "50%",
-                background: "rgba(155,143,224,0.12)", border: "2px solid rgba(155,143,224,0.3)",
+                background: "rgba(232,168,32,0.12)", border: "2px solid rgba(232,168,32,0.25)",
                 display: "flex", alignItems: "center", justifyContent: "center",
               }}>
                 <svg width="26" height="28" viewBox="0 0 16 18" fill="none"><rect x="1" y="7" width="14" height="10" rx="2.5" stroke="#B8AFEC" strokeWidth="1.5"/><path d="M4 7V5a4 4 0 0 1 8 0v2" stroke="#B8AFEC" strokeWidth="1.5" strokeLinecap="round"/></svg>
               </div>
             </div>
 
-            <p style={{ fontFamily: T.sans, fontSize: 12, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", color: "rgba(155,143,224,0.6)", margin: "0 0 10px" }}>
+            <p style={{ fontFamily: T.sans, fontSize: 12, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", color: "rgba(184,175,236,0.7)", margin: "0 0 10px" }}>
               You've built momentum
             </p>
             <h2 style={{ fontFamily: T.serif, fontSize: "clamp(26px,5vw,34px)", fontWeight: 400, color: "#fff", margin: "0 0 8px", lineHeight: 1.15, letterSpacing: -0.5 }}>
               Keep it going.
             </h2>
-            <p style={{ fontFamily: T.sans, fontSize: 15, color: "rgba(255,255,255,0.5)", margin: "0 0 32px", lineHeight: 1.65 }}>
+            <p style={{ fontFamily: T.sans, fontSize: 15, color: "rgba(255,255,255,0.55)", margin: "0 0 32px", lineHeight: 1.65 }}>
               You've completed 2 days. Most people stop here.<br/>The ones who don't are the ones who change.
             </p>
 
@@ -7776,7 +7792,7 @@ Write the summary in third person ("They were working on...", "They mentioned...
             <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 28 }}>
               {/* 3-month — recommended */}
               <div style={{
-                background: "rgba(155,143,224,0.12)", border: "2px solid rgba(155,143,224,0.4)",
+                background: "rgba(232,168,32,0.1)", border: "2px solid rgba(232,168,32,0.3)",
                 borderRadius: 16, padding: "20px 20px 18px", position: "relative", overflow: "hidden",
               }}>
                 <div style={{ position: "absolute", top: 0, right: 0, background: T.purple, borderRadius: "0 14px 0 10px", padding: "5px 12px" }}>
@@ -7784,10 +7800,10 @@ Write the summary in third person ("They were working on...", "They mentioned...
                 </div>
                 <div style={{ display: "flex", alignItems: "baseline", gap: 6, marginBottom: 6 }}>
                   <span style={{ fontFamily: T.sans, fontSize: 32, fontWeight: 800, color: "#fff", lineHeight: 1 }}>$13.99</span>
-                  <span style={{ fontFamily: T.sans, fontSize: 14, color: "rgba(255,255,255,0.4)" }}>/month</span>
+                  <span style={{ fontFamily: T.sans, fontSize: 14, color: "rgba(255,255,255,0.5)" }}>/month</span>
                 </div>
                 <p style={{ fontFamily: T.sans, fontSize: 13, fontWeight: 600, color: "rgba(255,255,255,0.7)", margin: "0 0 4px" }}>3 months · $41.97 billed once</p>
-                <p style={{ fontFamily: T.sans, fontSize: 13, color: "rgba(255,255,255,0.35)", margin: 0, lineHeight: 1.5 }}>It takes 8 weeks to build a real habit. This gives you the full runway.</p>
+                <p style={{ fontFamily: T.sans, fontSize: 13, color: "rgba(255,255,255,0.45)", margin: 0, lineHeight: 1.5 }}>It takes 8 weeks to build a real habit. This gives you the full runway.</p>
                 <button
                   onClick={() => { /* payment integration placeholder */ }}
                   style={{ width: "100%", marginTop: 14, background: "#fff", color: T.black, border: "none", borderRadius: 10, padding: "14px 0", fontFamily: T.sans, fontSize: 15, fontWeight: 700, cursor: "pointer", letterSpacing: -0.2 }}>
@@ -7797,40 +7813,40 @@ Write the summary in third person ("They were working on...", "They mentioned...
 
               {/* 1-month */}
               <div style={{
-                background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.1)",
+                background: "rgba(30,30,42,0.15)", border: `1px solid rgba(255,255,255,0.08)`,
                 borderRadius: 16, padding: "18px 20px",
               }}>
                 <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
                   <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
                     <span style={{ fontFamily: T.sans, fontSize: 26, fontWeight: 800, color: "#fff", lineHeight: 1 }}>$19.99</span>
-                    <span style={{ fontFamily: T.sans, fontSize: 14, color: "rgba(255,255,255,0.4)" }}>/month</span>
+                    <span style={{ fontFamily: T.sans, fontSize: 14, color: "rgba(255,255,255,0.5)" }}>/month</span>
                   </div>
                   <button
                     onClick={() => { /* payment integration placeholder */ }}
-                    style={{ background: "rgba(255,255,255,0.1)", color: "#fff", border: "1px solid rgba(255,255,255,0.15)", borderRadius: 8, padding: "10px 18px", fontFamily: T.sans, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+                    style={{ background: "rgba(255,255,255,0.08)", color: "#fff", border: `1.5px solid rgba(255,255,255,0.15)`, borderRadius: 8, padding: "10px 18px", fontFamily: T.sans, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
                     Start monthly
                   </button>
                 </div>
-                <p style={{ fontFamily: T.sans, fontSize: 13, color: "rgba(255,255,255,0.35)", margin: "6px 0 0", lineHeight: 1.5 }}>Try it for a month. Cancel anytime.</p>
+                <p style={{ fontFamily: T.sans, fontSize: 13, color: "rgba(255,255,255,0.45)", margin: "6px 0 0", lineHeight: 1.5 }}>Try it for a month. Cancel anytime.</p>
               </div>
 
               {/* Annual */}
               <div style={{
-                background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.1)",
+                background: "rgba(30,30,42,0.15)", border: `1px solid rgba(255,255,255,0.08)`,
                 borderRadius: 16, padding: "18px 20px",
               }}>
                 <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
                   <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
                     <span style={{ fontFamily: T.sans, fontSize: 26, fontWeight: 800, color: "#fff", lineHeight: 1 }}>$8.99</span>
-                    <span style={{ fontFamily: T.sans, fontSize: 14, color: "rgba(255,255,255,0.4)" }}>/month</span>
+                    <span style={{ fontFamily: T.sans, fontSize: 14, color: "rgba(255,255,255,0.5)" }}>/month</span>
                   </div>
                   <button
                     onClick={() => { /* payment integration placeholder */ }}
-                    style={{ background: "rgba(255,255,255,0.1)", color: "#fff", border: "1px solid rgba(255,255,255,0.15)", borderRadius: 8, padding: "10px 18px", fontFamily: T.sans, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+                    style={{ background: "rgba(255,255,255,0.08)", color: "#fff", border: `1.5px solid rgba(255,255,255,0.15)`, borderRadius: 8, padding: "10px 18px", fontFamily: T.sans, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
                     Start annual
                   </button>
                 </div>
-                <p style={{ fontFamily: T.sans, fontSize: 13, color: "rgba(255,255,255,0.35)", margin: "6px 0 0", lineHeight: 1.5 }}>
+                <p style={{ fontFamily: T.sans, fontSize: 13, color: "rgba(255,255,255,0.45)", margin: "6px 0 0", lineHeight: 1.5 }}>
                   $107.88/year · <span style={{ color: "rgba(93,202,165,0.8)" }}>Save 55%</span> · Built to reach your 12-month goal.
                 </p>
               </div>
@@ -7839,10 +7855,10 @@ Write the summary in third person ("They were working on...", "They mentioned...
             {/* Beta bypass */}
             <button
               onClick={() => { setPaywallBypassed(true); }}
-              style={{ background: "none", border: "none", fontFamily: T.sans, fontSize: 13, color: "rgba(255,255,255,0.2)", cursor: "pointer", padding: "8px 0", transition: "color 0.15s" }}
-              onMouseEnter={e => e.currentTarget.style.color = "rgba(255,255,255,0.4)"}
-              onMouseLeave={e => e.currentTarget.style.color = "rgba(255,255,255,0.2)"}>
-              I'm a beta tester — continue for free
+              style={{ background: "none", border: "none", fontFamily: T.sans, fontSize: 13, color: "#9494A6", cursor: "pointer", padding: "8px 0", transition: "color 0.15s" }}
+              onMouseEnter={e => e.currentTarget.style.color = "rgba(255,255,255,0.6)"}
+              onMouseLeave={e => e.currentTarget.style.color = "rgba(255,255,255,0.35)"}>
+              I'm a beta tester — let me in
             </button>
           </div>
         </div>
@@ -7876,10 +7892,10 @@ class ErrorBoundary extends React.Component {
       return (
         <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "#fff", padding: 32 }}>
           <div style={{ maxWidth: 500, textAlign: "center" }}>
-            <p style={{ fontFamily: "Georgia, serif", fontSize: 20, color: "#28243a", marginBottom: 12 }}>Something went wrong</p>
-            <p style={{ fontFamily: "Inter, sans-serif", fontSize: 14, color: "#9892a8", marginBottom: 24, lineHeight: 1.6 }}>The app encountered an error. Try refreshing.</p>
+            <p style={{ fontFamily: "'DM Serif Display', Georgia, serif", fontSize: 20, color: "#2D2A3E", marginBottom: 12 }}>Well, that wasn't supposed to happen</p>
+            <p style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 14, color: "#9892a8", marginBottom: 24, lineHeight: 1.6 }}>The app encountered an error. Try refreshing.</p>
             <details style={{ textAlign: "left", background: "#f9f8fc", border: "1px solid #dcdaeb", borderRadius: 6, padding: "10px 14px" }}>
-              <summary style={{ fontFamily: "Inter, sans-serif", fontSize: 12, color: "#9892a8", cursor: "pointer" }}>Error details</summary>
+              <summary style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 12, color: "#9892a8", cursor: "pointer" }}>Error details</summary>
               <pre style={{ fontFamily: "monospace", fontSize: 11, color: "#3a3550", marginTop: 10, whiteSpace: "pre-wrap", wordBreak: "break-all", lineHeight: 1.5 }}>
                 {this.state.error?.toString()}
                 {"\n\n"}
@@ -7895,9 +7911,9 @@ class ErrorBoundary extends React.Component {
 }
 
 // ─── Root ─────────────────────────────────────────────────
-const PLAN_STORAGE_KEY = "secondact_saved_plan";
+const PLAN_STORAGE_KEY = "bebril_saved_plan";
 
-export default function SecondActApp() {
+export default function BeBrilApp() {
   const scrollTop = () => window.scrollTo({ top: 0, behavior: "smooth" });
 
   const [savedPlan, setSavedPlan] = useState(null);
@@ -7955,7 +7971,6 @@ export default function SecondActApp() {
   return (
     <ErrorBoundary>
     <div style={{ minHeight: "100vh", background: "#fff", fontFamily: T.sans }}>
-      <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
       {screen === "landing" && <LandingPage onStart={() => { setScreen("quiz"); scrollTop(); }} onResume={resumeProgram} savedPlan={savedPlan} />}
       {screen === "quiz" && <QuizScreen onComplete={a => { setAnswers(a); setAuditTasks(null); setScreen("generating"); scrollTop(); }} onBack={() => { setScreen("landing"); scrollTop(); }} />}
       {screen === "generating" && answers && (
