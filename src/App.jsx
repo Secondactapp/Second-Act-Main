@@ -1,4 +1,3 @@
-"use client";
 import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 
 // ─── Tokens ───────────────────────────────────────────────
@@ -2334,6 +2333,13 @@ function LandingPage({ onStart, onResume, savedPlan }) {
           .sa-footer-inner { flex-direction: column !important; gap: 16px !important; align-items: flex-start !important; }
           .sa-dashboard-frame { text-align: left !important; }
           .sa-dashboard-frame p { text-align: left !important; }
+          .sa-comparison-scroll { overflow-x: auto !important; -webkit-overflow-scrolling: touch; margin: 0 -16px; padding: 0 16px; }
+          .sa-comparison-table { min-width: 560px !important; font-size: 12px !important; }
+          .sa-comparison-table .sa-comp-label { padding: 14px 12px 14px 14px !important; min-width: 100px !important; }
+          .sa-comparison-table .sa-comp-cell { padding: 14px 16px !important; }
+        }
+        @media (max-width: 380px) {
+          .sa-hero-cta .sa-btn-primary { font-size: 15px !important; padding: 14px 24px !important; }
         }
       `}</style>
 
@@ -2497,11 +2503,11 @@ function LandingPage({ onStart, onResume, savedPlan }) {
           </FadeIn>
 
           <FadeIn delay={80}>
-            <div className="sa-comparison-scroll" style={{ WebkitOverflowScrolling: "touch" }}>
-            <div style={{ borderRadius: 20, overflow: "hidden", boxShadow: "0 8px 48px rgba(15,14,30,0.10), 0 2px 12px rgba(15,14,30,0.05)", minWidth: 620 }}>
+            <div className="sa-comparison-scroll" style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
+            <div className="sa-comparison-table" style={{ borderRadius: 20, overflow: "hidden", boxShadow: "0 8px 48px rgba(15,14,30,0.10), 0 2px 12px rgba(15,14,30,0.05)", minWidth: 560 }}>
 
               {/* Column headers */}
-              <div style={{ display: "grid", gridTemplateColumns: "180px 1fr 1fr" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "140px 1fr 1fr" }}>
                 {/* Empty corner */}
                 <div style={{ background: "#F7F6FB", borderBottom: `1px solid ${C.border}`, borderRight: `1px solid ${C.border}` }} />
                 {/* Coaching header */}
@@ -2532,7 +2538,7 @@ function LandingPage({ onStart, onResume, savedPlan }) {
               ].map(({ label, coaching, secondact }, i) => {
                 const isLast = i === 6;
                 return (
-                  <div key={i} style={{ display: "grid", gridTemplateColumns: "180px 1fr 1fr" }}>
+                  <div key={i} style={{ display: "grid", gridTemplateColumns: "140px 1fr 1fr" }}>
 
                     {/* Label cell */}
                     <div style={{
@@ -5576,6 +5582,10 @@ function DashboardScreen({ plan: initialPlan, onBack, startDate }) {
         @media (max-width: 420px) {
           .sa-dash-task-card { padding: 20px 16px !important; }
           .sa-dash-nora-box { padding: 14px 14px !important; }
+        }
+        @media (max-width: 640px) {
+          .sa-dash-week-arc { overflow-x: auto !important; -webkit-overflow-scrolling: touch; }
+          .sa-dash-time-picker { flex-wrap: wrap !important; }
         }
       `}</style>
 
