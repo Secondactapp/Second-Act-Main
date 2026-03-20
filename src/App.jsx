@@ -2242,6 +2242,7 @@ function LandingPage({ onStart, onResume, savedPlan }) {
         }
 
         @media (max-width: 640px) {
+          .sa-hero-headline { font-size: clamp(22px, 5.5vw, 36px) !important; }
           .sa-hero-cta { flex-direction: column !important; align-items: stretch !important; }
           .sa-hero-cta .sa-btn-primary, .sa-hero-cta .sa-btn-ghost { width: 100%; justify-content: center; }
           .sa-steps-grid { grid-template-columns: 1fr !important; }
@@ -2305,7 +2306,7 @@ function LandingPage({ onStart, onResume, savedPlan }) {
 
           {/* Headline */}
           <FadeIn delay={80}>
-            <h1 style={{
+            <h1 className="sa-hero-headline" style={{
               fontFamily: T.serif,
               fontSize: "clamp(36px, 6vw, 68px)",
               fontWeight: 400,
@@ -2315,6 +2316,7 @@ function LandingPage({ onStart, onResume, savedPlan }) {
               margin: "0 0 28px",
               position: "relative",
               zIndex: 1,
+              whiteSpace: "nowrap",
             }}>
               Make a{" "}
               <span style={{ color: C.accentD, fontStyle: "italic", position: "relative", display: "inline-block" }}>
