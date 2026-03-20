@@ -2242,7 +2242,7 @@ function LandingPage({ onStart, onResume, savedPlan }) {
         }
 
         @media (max-width: 640px) {
-          .sa-hero-headline { font-size: clamp(22px, 5.5vw, 36px) !important; }
+          .sa-hero-headline { white-space: normal !important; }
           .sa-hero-cta { flex-direction: column !important; align-items: stretch !important; }
           .sa-hero-cta .sa-btn-primary, .sa-hero-cta .sa-btn-ghost { width: 100%; justify-content: center; }
           .sa-steps-grid { grid-template-columns: 1fr !important; }
