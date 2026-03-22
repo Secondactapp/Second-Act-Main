@@ -4,9 +4,9 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from "react"
 // Manages document.title, meta tags, and structured data per screen.
 // Works in any React SPA (CRA, Vite, Next.js client components).
 const SEO_BASE = {
-  siteName: "Be Brilliant",
+  siteName: "BeBrilliant",
   siteUrl: "https://bebrilapp.com", // Update to your actual domain
-  description: "Be Brilliant is your daily career development program. Personality-matched, research-backed, one task a day. Get a clear, personalized career plan in minutes.",
+  description: "BeBrilliant is your daily career development program. Personality-matched, research-backed, 2 hours a day. Get a clear, personalized career plan in minutes.",
   ogImage: "https://bebrilapp.com/og-image.png", // Update with actual OG image URL
 };
 
@@ -61,7 +61,7 @@ function SEOStructuredData() {
   const jsonLd = {
     "@context": "https://schema.org",
     "@type": "SoftwareApplication",
-    "name": "Be Brilliant",
+    "name": "BeBrilliant",
     "applicationCategory": "LifestyleApplication",
     "description": SEO_BASE.description,
     "url": SEO_BASE.siteUrl,
@@ -138,6 +138,9 @@ const Store = {
 
 
 // ─── Shared Constants (single source of truth) ──────────
+const MODEL_FAST = "claude-haiku-4-5-20251001";
+const MODEL_SMART = "claude-sonnet-4-6";
+const SPARKLE_PATH = "M12 2C12.6 8 16 11.4 22 12C16 12.6 12.6 16 12 22C11.4 16 8 12.6 2 12C8 11.4 11.4 8 12 2Z";
 const TODAY_ISO = () => new Date().toISOString().split("T")[0]; // "2026-03-20"
 const TODAY_READABLE = () => new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" }); // "Friday, March 20, 2026"
 const TODAY_CONTEXT = () => `Today's date is ${TODAY_READABLE()} (${TODAY_ISO()}). Use this to calculate deadlines, timelines, and time remaining accurately.`;
@@ -153,10 +156,13 @@ function normalizeBlocker(blocker) {
   return Array.isArray(blocker) ? blocker : (blocker != null ? [blocker] : []);
 }
 
-function calcStreak(dayStatus) {
+function calcStreak(dayStatus, streakFreezeActive) {
+  // Allows ONE unfrozen skip as grace before breaking the streak
   let s = 0, skipsUsed = 0;
+  const freezes = streakFreezeActive || {};
   for (let d = 1; d <= TOTAL_DAYS; d++) {
     if (dayStatus[d] === 'done') s++;
+    else if (dayStatus[d] === 'skipped' && freezes[d]) { /* freeze protected, streak continues */ }
     else if (dayStatus[d] === 'skipped' && skipsUsed === 0) skipsUsed++;
     else break;
   }
@@ -170,6 +176,21 @@ function lk(arr, idx) {
 // ─── API response text extractor (deduplicated) ──────────
 function extractText(data) {
   return (data.content || []).map(b => b.text || "").join("");
+}
+
+// ─── Shared API fetch with error check ────────────────────
+async function apiFetch(body, signal) {
+  const res = await fetch("/api/generate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    ...(signal ? { signal } : {}),
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const errText = await res.text().catch(() => "");
+    throw new Error(`API ${res.status}: ${errText.slice(0, 200)}`);
+  }
+  return res.json();
 }
 
 
@@ -198,6 +219,12 @@ const GOAL_TEXTS = [
   "Feel genuinely solid and confident in my job or career",
 ];
 
+// Single source of truth for resolving goal display text
+// Priority: custom goal > index-based goal > fallback
+function getGoalText(plan) {
+  return plan._answers?.goal_custom || GOAL_TEXTS[plan._answers?.goal] || "Your goal";
+}
+
 // Archetype identity taglines, shown on dashboard as behavioral reinforcement
 // ─── Curated inspirational quotes, career progress & daily action ───────────
 const CAREER_QUOTES = [
@@ -209,7 +236,7 @@ const CAREER_QUOTES = [
   { text: "Habits that are tied to a specific time and place are far more likely to stick than intentions alone.", author: "Implementation intention research" },
   { text: "People who share their progress with a peer are significantly more likely to follow through.", author: "Accountability research" },
   { text: "Identity change precedes behavior change. People who act as if they are already the person they want to become are more likely to get there.", author: "Behavioral psychology" },
-  { text: "The average professional who spends 30 minutes a day on deliberate skill development will outperform peers who don't within 8 weeks.", author: "Deliberate practice research" },
+  { text: "The average professional who spends 2 hours a day on deliberate skill development will outperform peers who don't within 8 weeks.", author: "Deliberate practice research" },
   { text: "Completion, not perfection, is the engine of forward motion. Done is always more valuable than ideal.", author: "Behavioral research" },
   { text: "People who break a large goal into specific weekly tasks are three times more likely to complete it than those who keep the goal abstract.", author: "Implementation research" },
   { text: "The hardest part of any task is starting. Once you begin, momentum does most of the work.", author: "Activation energy research" },
@@ -277,7 +304,7 @@ const PROFILE_BASE = {
 
 // ─── Achievement definitions ───────────────────────────────
 // id: unique key | icon: emoji | name: displayed title | desc: one-line what it means
-// earned: fn(ctx) → bool, where ctx = { dayStatus, dayTasks, streakCount, brilChangeMade, brilPickDay }
+// earned: fn(ctx) → bool | progress: fn(ctx) → {current, target} or null (for progress bars on unearned)
 const ACHIEVEMENTS = [
   {
     id: "first_move",
@@ -310,6 +337,15 @@ const ACHIEVEMENTS = [
       }
       return false;
     },
+    progress: ({ dayStatus }) => {
+      // Show best week's completion
+      let best = 0;
+      for (let w = 0; w < TOTAL_WEEKS; w++) {
+        const done = Array.from({ length: 7 }, (_, i) => w * 7 + i + 1).filter(d => dayStatus[d] === 'done').length;
+        best = Math.max(best, done);
+      }
+      return { current: best, target: 7 };
+    },
   },
   {
     id: "compounding",
@@ -317,6 +353,7 @@ const ACHIEVEMENTS = [
     name: "On Fire",
     desc: "14 straight. The streak is real.",
     earned: ({ streakCount }) => streakCount >= 14,
+    progress: ({ streakCount }) => ({ current: Math.min(streakCount, 14), target: 14 }),
   },
   {
     id: "deep_cut",
@@ -326,6 +363,10 @@ const ACHIEVEMENTS = [
     earned: ({ dayStatus, dayTasks }) => {
       const count = Object.entries(dayTasks).filter(([d, t]) => dayStatus[d] === 'done' && t?.tag === 'Reflect').length;
       return count >= 3;
+    },
+    progress: ({ dayStatus, dayTasks }) => {
+      const count = Object.entries(dayTasks).filter(([d, t]) => dayStatus[d] === 'done' && t?.tag === 'Reflect').length;
+      return { current: Math.min(count, 3), target: 3 };
     },
   },
   {
@@ -337,12 +378,16 @@ const ACHIEVEMENTS = [
       const count = Object.entries(dayTasks).filter(([d, t]) => dayStatus[d] === 'done' && t?.tag === 'Apply').length;
       return count >= 5;
     },
+    progress: ({ dayStatus, dayTasks }) => {
+      const count = Object.entries(dayTasks).filter(([d, t]) => dayStatus[d] === 'done' && t?.tag === 'Apply').length;
+      return { current: Math.min(count, 5), target: 5 };
+    },
   },
   {
     id: "shifted",
     icon: "🧭",
     name: "Plot Twist",
-    desc: "Changed direction with Be Brilliant. Flexibility is a superpower.",
+    desc: "Changed direction with BeBrilliant. Flexibility is a superpower.",
     earned: ({ brilChangeMade }) => brilChangeMade,
   },
   {
@@ -358,6 +403,7 @@ const ACHIEVEMENTS = [
     name: "Halfway There",
     desc: "26 weeks in. Deep end territory.",
     earned: ({ dayStatus }) => Object.values(dayStatus).filter(s => s === 'done').length >= 130,
+    progress: ({ dayStatus }) => ({ current: Math.min(Object.values(dayStatus).filter(s => s === 'done').length, 130), target: 130 }),
   },
   {
     id: "quarter",
@@ -365,6 +411,7 @@ const ACHIEVEMENTS = [
     name: "First Quarter",
     desc: "13 weeks. A whole season of progress.",
     earned: ({ dayStatus }) => Object.values(dayStatus).filter(s => s === 'done').length >= 65,
+    progress: ({ dayStatus }) => ({ current: Math.min(Object.values(dayStatus).filter(s => s === 'done').length, 65), target: 65 }),
   },
   {
     id: "full_program",
@@ -372,6 +419,21 @@ const ACHIEVEMENTS = [
     name: "The Full Brilliant",
     desc: "300 days completed. Absolute legend.",
     earned: ({ dayStatus }) => Object.values(dayStatus).filter(s => s === 'done').length >= 300,
+    progress: ({ dayStatus }) => ({ current: Math.min(Object.values(dayStatus).filter(s => s === 'done').length, 300), target: 300 }),
+  },
+  {
+    id: "comeback_kid",
+    icon: "💪",
+    name: "Comeback Kid",
+    desc: "Came back after 3+ days away. That takes guts.",
+    earned: ({ comebackCompleted }) => !!comebackCompleted,
+  },
+  {
+    id: "streak_shield",
+    icon: "🛡",
+    name: "Streak Shield",
+    desc: "Used a streak freeze. Smart move.",
+    earned: ({ streakFreezeUsed }) => !!streakFreezeUsed,
   },
 ];
 
@@ -974,13 +1036,6 @@ const questions = [
   },
 ];
 
-// ─── Task Audit ───────────────────────────────────────────
-const AUDIT_PROMPTS = [
-  { label: "Task 1 of 3", text: "What's the single task that eats most of your time each week?", sub: "Be specific. Not 'analysis' , more like 'building weekly performance reports in Excel.'", placeholder: "e.g. Building weekly performance reports in Excel" },
-  { label: "Task 2 of 3", text: "What's a task you do repeatedly that feels like it could be more efficient?", sub: "The one where you think 'there has to be a better way to do this.'", placeholder: "e.g. Summarizing meeting notes and distributing action items" },
-  { label: "Task 3 of 3", text: "What's the part of your work that requires the most judgment or experience?", sub: "The thing a smart new hire couldn't do well even with good instructions.", placeholder: "e.g. Deciding which client issues to escalate vs. handle directly" },
-];
-
 // ─── Task Exposure Scoring (Change #7: honesty flag) ──────
 function scoreTaskExposure(taskText) {
   if (!taskText || taskText.trim().length < 5) return { score: 50, label: "Unknown", color: "#888", isDirectional: true };
@@ -1052,7 +1107,7 @@ function generateNarrative(answers, classification) {
 
   // ── BEAT 2: Concern reframe, now multi-select aware ──
   const blockerConcerns = {
-    0: "Time is the constraint. Every task in your plan is scoped to 30 minutes or less.",
+    0: "Time is the constraint. Your daily session is broken into short micro-tasks, each 5–15 minutes. Start with one. The structure does the rest.",
     1: "Overwhelm is the problem. Your plan is sequential for exactly this reason, one thing at a time, in order.",
     2: "You start things but lose the thread. That's a structure problem, not a motivation problem. Every task has a clear endpoint.",
     3: "You learn things but don't apply them to your actual work. So your plan is built around application, not consumption.",
@@ -1076,7 +1131,7 @@ function generateNarrative(answers, classification) {
 
   // ── BEAT 4: Blocker narrative, composite for multi-select ──
   const blockerLines = {
-    0: "Time is the real constraint. Every task in your plan fits inside 30 minutes.",
+    0: "Time is the real constraint. Your session is structured as micro-tasks, each one short and self-contained. You can stop after any task and still make progress.",
     1: "Overwhelm is one of your blockers, too much, no clear starting point. Your plan is sequential for exactly this reason. We do the filtering so you don't have to.",
     2: "You start things but lose the thread. That's a structure problem, not a motivation problem. Every task has a clear endpoint, you'll know when you're done.",
     3: "You learn things but don't apply them to your actual work. So your plan is built around application, not consumption. Everything asks you to do something real.",
@@ -1268,81 +1323,6 @@ function buildProfileReason(profileName, classification, answers) {
 }
 
 
-// ─── Signal Insights ──────────────────────────────────────
-// Single personalized observation combining situation + goal + blocker.
-// Reads like someone who read every answer and noticed something specific.
-function generateSignalInsights(classification, answers) {
-  const {
-    isAnxietyDriven, isCredibilityDefender,
-    hasTheoryGap, isHighCommitmentBeginner, isPureNavigator,
-    isExternallyMotivated, isInternallyMotivated,
-    readinessLevel, orientation,
-  } = classification;
-
-  const goal    = answers.goal             ?? -1;
-  const blockerArr = normalizeBlocker(answers.blocker);
-  const concern = blockerArr[0] ?? -1; // primary blocker index
-
-  // Build the insight, 2 lines about who this archetype is for this specific person
-  const urgency   = answers.urgency          ?? -1;
-  const profile   = classification.profileName || "";
-
-  // Urgency flavour, what's actually driving this
-  const urgencyLine =
-    urgency === 0 ? "AI is moving faster than you can keep up" :
-    urgency === 1 ? "you feel stuck and need a change" :
-    urgency === 2 ? "a layoff made you rethink your path" :
-    urgency === 3 ? "you want a promotion or a better role" :
-    urgency === 4 ? "you want to move to a new company" :
-    urgency === 5 ? "you want to switch fields" :
-    urgency === 6 ? "you're keen on exploring new opportunities" : null;
-
-  // Goal flavour, what they actually want
-  const goalLine =
-    answers.goal_custom?.trim()    ? `your goal, ${answers.goal_custom.trim()}` :
-    goal === 0 ? "landing a role that's actually a level up" :
-    goal === 1 ? "moving to a company that fits where you want to go" :
-    goal === 2 ? "making a real pivot into new work" :
-    goal === 3 ? "building the skills that keep you relevant as AI reshapes the work" :
-    goal === 4 ? "feeling genuinely solid and confident, not performing it, actually there" : "moving forward";
-
-  let text = "";
-
-  if (profile === "The Compounder") {
-    text = urgencyLine ? `The Compounder is already in motion, ${urgencyLine} is fuel, not friction.` : `The Compounder is already in motion and needs to make sure it's adding up, not spreading thin.`;
-
-  } else if (profile === "The Cartographer") {
-    text = goalLine ? `The Cartographer builds the picture before moving, for you, ${goalLine} requires a mental model that holds, not a list of things to try.` : `The Cartographer builds the picture before making a move, and needs the framework before acting with confidence.`;
-
-  } else if (profile === "The Primed") {
-    text = urgencyLine ? `The Primed has the awareness and the intent, with ${urgencyLine}, the move now is structure, not more reading.` : `The Primed has the awareness and the intent, what's been missing is a structure that actually converts that into daily practice.`;
-
-  } else if (profile === "The Scout") {
-    text = goalLine ? `The Scout needs enough of the map before committing to ${goalLine}, and your program builds exactly that.` : `The Scout needs to understand the landscape before committing to a direction, and that instinct is worth following.`;
-
-  } else if (profile === "The Incumbent") {
-    text = urgencyLine ? `The Incumbent has invested years into expertise that matters, ${urgencyLine} makes it specific, not vague.` : `The Incumbent has invested years into real expertise, the question now is which parts are protected and which need reinforcing.`;
-
-  } else if (profile === "The Navigator") {
-    text = goalLine ? `The Navigator thinks before moving, ${goalLine} requires clarity that holds under pressure, and that's what this builds.` : `The Navigator thinks before moving, and needs a picture solid enough to make calls that actually hold.`;
-
-  } else if (profile === "The Launchpad") {
-    text = urgencyLine ? `The Launchpad is earlier than most, ${urgencyLine} is the right reason to move now, and the program gives you a real first step.` : `The Launchpad is earlier than most, which is the best position to be in, the whole ground is still open.`;
-
-  } else if (profile === "The Skeptic") {
-    text = goalLine ? `The Skeptic doesn't move until the evidence is solid, your program earns that trust one specific thing at a time, toward ${goalLine}.` : `The Skeptic doesn't move until the evidence is solid enough to trust, and that standard is exactly what makes the progress durable.`;
-
-  } else if (profile === "The Pivot") {
-    text = urgencyLine ? `The Pivot is navigating a transition, with ${urgencyLine} as the backdrop, the program asks for one real thing per day until the ground feels solid.` : `The Pivot is navigating a transition, and the program meets you where you actually are, not where you were.`;
-
-  } else {
-    text = `This program is built specifically for your situation, not a generic version of career development.`;
-  }
-
-  return [{ icon: "→", text }];
-}
-
-
 // ─── Anchor Thought Generator ─────────────────────────────
 // One thought to carry through Day 1. Derived from profile + goal.
 // Not a task. A lens.
@@ -1409,7 +1389,7 @@ function generatePlan(answers, auditTasks) {
   const classification = classifyProfile(answers);
   const profileName = classification.profileName;
   const profileData = buildProfile(profileName, role, answers.seniority, answers, classification);
-  const timeSlot = "30 min"; // default, time question removed
+  const timeSlot = "2 hours"; // daily session length
 
   const seniorityText = QOpt("seniority", answers.seniority) || "";
   const goalText = QOpt("goal", answers.goal) || "";
@@ -2081,7 +2061,7 @@ const LOGO_SRC = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACq
 // ─── Logo component ────────────────────────────────────────
 const Logo = React.memo(function Logo({ size = 28 }) {
   return (
-    <svg width={size} height={size} viewBox="0 0 80 80" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Be Brilliant logo">
+    <svg width={size} height={size} viewBox="0 0 80 80" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="BeBrilliant logo">
       <rect width="80" height="80" rx="18" fill="#D99A1E" />
       <circle cx="16" cy="66" r="7.5" fill="#fff" />
       <line x1="21" y1="61" x2="42" y2="40" stroke="#fff" strokeWidth="7" strokeLinecap="round" />
@@ -2133,8 +2113,8 @@ function Label({ children, light = false }) {
 // ─── REDESIGNED LANDING PAGE ──────────────────────────────
 function LandingPage({ onStart, onResume, savedPlan }) {
   useSEO({
-    title: null, // Uses default: "Be Brilliant — Your Daily Career Development Program"
-    description: "Be Brilliant is your daily career development program. Personality-matched, research-backed, one task a day. Get a clear, personalized career plan in minutes.",
+    title: null, // Uses default: "BeBrilliant — Your Daily Career Development Program"
+    description: "BeBrilliant is your daily career development program. Personality-matched, research-backed, 2 hours a day. Get a clear, personalized career plan in minutes.",
     path: "/",
   });
   const [scrolled, setScrolled] = useState(false);
@@ -2242,7 +2222,6 @@ function LandingPage({ onStart, onResume, savedPlan }) {
         }
 
         @media (max-width: 640px) {
-          .sa-hero-headline { white-space: normal !important; }
           .sa-hero-cta { flex-direction: column !important; align-items: stretch !important; }
           .sa-hero-cta .sa-btn-primary, .sa-hero-cta .sa-btn-ghost { width: 100%; justify-content: center; }
           .sa-steps-grid { grid-template-columns: 1fr !important; }
@@ -2266,10 +2245,10 @@ function LandingPage({ onStart, onResume, savedPlan }) {
       >
         <div style={{ maxWidth: 1080, margin: "0 auto", padding: "0 clamp(16px,4vw,40px)", height: 64, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 }}>
           {/* Brand, clickable, scrolls to top */}
-          <button aria-label="Be Brilliant — scroll to top" onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })} style={{ display: "flex", alignItems: "center", gap: 10, background: "none", border: "none", cursor: "pointer", padding: 0 }}>
-            <img src={LOGO_SRC} alt="Be Brilliant" width={32} height={32} style={{ borderRadius: 7, display: "block" }} />
+          <button aria-label="BeBrilliant — scroll to top" onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })} style={{ display: "flex", alignItems: "center", gap: 10, background: "none", border: "none", cursor: "pointer", padding: 0 }}>
+            <img src={LOGO_SRC} alt="BeBrilliant" width={32} height={32} style={{ borderRadius: 7, display: "block" }} />
             <span style={{ fontFamily: T.sans, fontSize: 18, fontWeight: 700, color: C.ink, letterSpacing: "-0.4px" }}>
-              Be Brilliant
+              BeBrilliant
             </span>
           </button>
 
@@ -2306,7 +2285,7 @@ function LandingPage({ onStart, onResume, savedPlan }) {
 
           {/* Headline */}
           <FadeIn delay={80}>
-            <h1 className="sa-hero-headline" style={{
+            <h1 style={{
               fontFamily: T.serif,
               fontSize: "clamp(36px, 6vw, 68px)",
               fontWeight: 400,
@@ -2316,7 +2295,6 @@ function LandingPage({ onStart, onResume, savedPlan }) {
               margin: "0 0 28px",
               position: "relative",
               zIndex: 1,
-              whiteSpace: "nowrap",
             }}>
               Make a{" "}
               <span style={{ color: C.accentD, fontStyle: "italic", position: "relative", display: "inline-block" }}>
@@ -2400,8 +2378,8 @@ function LandingPage({ onStart, onResume, savedPlan }) {
           </FadeIn>
           <FadeIn delay={180}>
             <div style={{ background: C.lemon, borderRadius: 16, padding: "20px 24px", marginTop: 16 }}>
-              <p style={{ fontFamily: T.sans, fontSize: 17, color: C.ink, margin: 0, lineHeight: 1.85, fontWeight: 400 }}>
-                Be Brilliant delivers a daily, personalized program based on your current reality. Backed by research and tailored to your personality, it updates in real time as you make progress and share feedback.
+              <p style={{ fontFamily: T.sans, fontSize: 15, color: C.ink, margin: 0, lineHeight: 1.75, fontWeight: 500, letterSpacing: 0.1 }}>
+                BeBrilliant delivers a daily, personalized program based on your current reality. Backed by research and tailored to your personality, it updates in real time as you make progress and share feedback.
               </p>
             </div>
           </FadeIn>
@@ -2409,11 +2387,11 @@ function LandingPage({ onStart, onResume, savedPlan }) {
       </section>
 
       {/* ── COMPARISON ──────────────────────────────────────── */}
-      <section aria-label="Why Be Brilliant" id="why-bebril" style={{ background: C.offWhite, padding: "96px clamp(16px,5vw,40px) 96px" }}>
+      <section aria-label="Why BeBrilliant" id="why-bebril" style={{ background: C.offWhite, padding: "96px clamp(16px,5vw,40px) 96px" }}>
         <div style={{ maxWidth: 860, margin: "0 auto" }}>
           <FadeIn>
             <div style={{ textAlign: "center", marginBottom: 56 }}>
-              <Label light>Why Be Brilliant</Label>
+              <Label light>Why BeBrilliant</Label>
               <h2 style={{ fontFamily: T.serif, fontSize: "clamp(32px, 4.5vw, 46px)", fontWeight: 400, color: C.ink, letterSpacing: "-0.5px", lineHeight: 1.2 }}>
                 A brilliant complement to coaching.
               </h2>
@@ -2447,7 +2425,7 @@ function LandingPage({ onStart, onResume, savedPlan }) {
                   <p style={{ fontFamily: T.sans, fontSize: 10, fontWeight: 700, letterSpacing: "0.14em", textTransform: "uppercase", color: C.accentD, margin: "0 0 6px" }}>Your brilliant alternative</p>
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                     <Logo size={18} />
-                    <p style={{ fontFamily: T.serif, fontSize: 20, fontWeight: 400, color: C.ink, margin: 0, letterSpacing: "-0.3px" }}>Be Brilliant</p>
+                    <p style={{ fontFamily: T.serif, fontSize: 20, fontWeight: 400, color: C.ink, margin: 0, letterSpacing: "-0.3px" }}>BeBrilliant</p>
                   </div>
                 </div>
               </div>
@@ -2455,11 +2433,11 @@ function LandingPage({ onStart, onResume, savedPlan }) {
               {/* Rows */}
               {[
                 { label: "Cost",             coaching: "$200–$500 / session 💸",                  bebril: "Free to start. Seriously."                           },
-                { label: "Availability",     coaching: "Weekly 1-hour sessions",                  bebril: "24/7. Be Brilliant doesn't sleep."                  },
+                { label: "Availability",     coaching: "Weekly 1-hour sessions",                  bebril: "24/7. BeBrilliant doesn't sleep."                  },
                 { label: "Personalization",  coaching: "Depends on your coach's mood",             bebril: "Tailored to your actual answers"                     },
                 { label: "Accountability",   coaching: "Between sessions? You're on your own.",    bebril: "Daily nudges. Lovingly persistent."                  },
                 { label: "Time to clarity",  coaching: "Weeks of exploration",                     bebril: "A clear plan in ~3 minutes"                         },
-                { label: "Thinking partner", coaching: "Your coach (when scheduled)",              bebril: "Be Brilliant. Every day. Remembers everything."      },
+                { label: "Thinking partner", coaching: "Your coach (when scheduled)",              bebril: "Mr. Bril. Your thinking partner. Every day."      },
                 { label: "Habit formation",  coaching: "Not really their thing",                   bebril: "Research-backed, behaviourally designed, mildly addictive" },
               ].map(({ label, coaching, bebril }, i) => {
                 const isLast = i === 6;
@@ -2487,21 +2465,21 @@ function LandingPage({ onStart, onResume, savedPlan }) {
 
             {/* ── MOBILE CARDS ── */}
             <div className="bb-compare-cards" style={{ flexDirection: "column", gap: 12 }}>
-              {/* Be Brilliant card header */}
+              {/* BeBrilliant card header */}
               <div style={{ background: C.accentLL, borderRadius: 16, padding: "18px 20px", border: `1px solid rgba(232,168,32,0.25)` }}>
                 <p style={{ fontFamily: T.sans, fontSize: 10, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", color: C.accentD, margin: "0 0 5px" }}>Your brilliant alternative</p>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <Logo size={18} />
-                  <p style={{ fontFamily: T.serif, fontSize: 18, fontWeight: 400, color: C.ink, margin: 0 }}>Be Brilliant</p>
+                  <p style={{ fontFamily: T.serif, fontSize: 18, fontWeight: 400, color: C.ink, margin: 0 }}>BeBrilliant</p>
                 </div>
               </div>
               {[
                 { label: "Cost",             coaching: "$200–$500 / session 💸",                  bebril: "Free to start. Seriously."                           },
-                { label: "Availability",     coaching: "Weekly 1-hour sessions",                  bebril: "24/7. Be Brilliant doesn't sleep."                  },
+                { label: "Availability",     coaching: "Weekly 1-hour sessions",                  bebril: "24/7. BeBrilliant doesn't sleep."                  },
                 { label: "Personalization",  coaching: "Depends on your coach's mood",             bebril: "Tailored to your actual answers"                     },
                 { label: "Accountability",   coaching: "Between sessions? You're on your own.",    bebril: "Daily nudges. Lovingly persistent."                  },
                 { label: "Time to clarity",  coaching: "Weeks of exploration",                     bebril: "A clear plan in ~3 minutes"                         },
-                { label: "Thinking partner", coaching: "Your coach (when scheduled)",              bebril: "Be Brilliant. Every day. Remembers everything."      },
+                { label: "Thinking partner", coaching: "Your coach (when scheduled)",              bebril: "Mr. Bril. Your thinking partner. Every day."      },
                 { label: "Habit formation",  coaching: "Not really their thing",                   bebril: "Research-backed, behaviourally designed, mildly addictive" },
               ].map(({ label, coaching, bebril }, i) => (
                 <div key={i} style={{ borderRadius: 14, overflow: "hidden", border: `1px solid ${C.border}`, boxShadow: "0 1px 6px rgba(30,28,40,0.05)" }}>
@@ -2514,7 +2492,7 @@ function LandingPage({ onStart, onResume, savedPlan }) {
                       <p style={{ fontFamily: T.sans, fontSize: 13, color: C.muted, margin: 0, lineHeight: 1.5 }}>{coaching}</p>
                     </div>
                     <div style={{ padding: "14px 16px", background: "rgba(232,168,32,0.06)" }}>
-                      <p style={{ fontFamily: T.sans, fontSize: 10, fontWeight: 600, letterSpacing: "0.1em", textTransform: "uppercase", color: C.accentD, margin: "0 0 5px" }}>Be Brilliant</p>
+                      <p style={{ fontFamily: T.sans, fontSize: 10, fontWeight: 600, letterSpacing: "0.1em", textTransform: "uppercase", color: C.accentD, margin: "0 0 5px" }}>BeBrilliant</p>
                       <p style={{ fontFamily: T.sans, fontSize: 14, color: C.ink, fontWeight: 500, margin: 0, lineHeight: 1.5 }}>{bebril}</p>
                     </div>
                   </div>
@@ -2535,7 +2513,7 @@ function LandingPage({ onStart, onResume, savedPlan }) {
                 Small steps, taken with care, build great futures.
               </h2>
               <p style={{ fontFamily: T.sans, fontSize: 18, color: C.body, lineHeight: 1.8, fontWeight: 400, maxWidth: 520, margin: "18px auto 0" }}>
-                Be Brilliant adapts your career plan and keeps you on track.
+                BeBrilliant adapts your career plan and keeps you on track.
               </p>
             </div>
           </FadeIn>
@@ -2553,92 +2531,159 @@ function LandingPage({ onStart, onResume, savedPlan }) {
                 </div>
               </div>
 
-              {/* Dashboard header, matches actual warm cream header */}
-              <div style={{ background: "#FBF5E6", padding: "18px 20px 16px", position: "relative", overflow: "hidden" }}>
+              {/* Dashboard header — matches actual dashboard */}
+              <div style={{ background: "#FBF5E6", padding: "16px 18px 14px", position: "relative", overflow: "hidden" }}>
                 {/* Floating shapes */}
-                <div style={{ position: "absolute", top: 6, right: "8%", width: 32, height: 32, borderRadius: 9, background: "#C8F0D8", opacity: 0.55, pointerEvents: "none" }} />
-                <div style={{ position: "absolute", bottom: 8, right: "2%", width: 16, height: 16, borderRadius: "50%", background: "#E0D4F8", opacity: 0.5, pointerEvents: "none" }} />
-                {/* Top bar */}
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-                  <button style={{ background: "none", border: "none", color: "#9494A6", fontFamily: T.sans, fontSize: 10, padding: 0 }}>← Back</button>
-                  <div style={{ display: "flex", gap: 5 }}>
-                    {["Progress", "Goal map"].map(label => (
-                      <div key={label} style={{ background: "rgba(30,30,42,0.04)", border: "1px solid #E0DEF0", borderRadius: 20, padding: "4px 10px", fontFamily: T.sans, fontSize: 10, color: "#3A3A50" }}>{label}</div>
-                    ))}
+                <div style={{ position: "absolute", top: 6, right: "8%", width: 28, height: 28, borderRadius: 8, background: C.lemon, opacity: 0.48, pointerEvents: "none" }} />
+                <div style={{ position: "absolute", top: "38%", right: "3%", width: 16, height: 16, borderRadius: "50%", background: C.lavender, opacity: 0.48, pointerEvents: "none" }} />
+                <div style={{ position: "absolute", bottom: "14%", right: "20%", width: 10, height: 10, borderRadius: 3, background: C.sky, opacity: 0.45, pointerEvents: "none" }} />
+                {/* Top bar — pill buttons matching actual dashboard */}
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                  <span style={{ color: "#9494A6", fontFamily: T.sans, fontSize: 10 }}>←</span>
+                  <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                    <div style={{ background: "rgba(30,30,42,0.03)", border: `1px solid ${C.border}`, borderRadius: 14, padding: "4px 9px", fontFamily: T.sans, fontSize: 10, color: "#3A3A50", display: "flex", alignItems: "center", gap: 4 }}>
+                      <svg width="9" height="9" viewBox="0 0 24 24" fill="none"><path d={SPARKLE_PATH} fill="#8B6914" opacity="0.7"/></svg>
+                      24
+                    </div>
+                    <div style={{ background: "rgba(30,30,42,0.03)", border: `1px solid ${C.border}`, borderRadius: 14, padding: "4px 9px", fontFamily: T.sans, fontSize: 10, color: "#3A3A50", display: "flex", alignItems: "center", gap: 3 }}>
+                      🔥 3
+                    </div>
+                    <div style={{ background: "rgba(30,30,42,0.03)", border: `1px solid ${C.border}`, borderRadius: 14, padding: "4px 9px", fontFamily: T.sans, fontSize: 10, color: "#3A3A50", display: "flex", alignItems: "center", gap: 3 }}>
+                      <svg width="9" height="9" viewBox="0 0 14 14" fill="none"><rect x="1" y="7" width="3" height="6" rx="1" fill="rgba(70,60,40,0.55)"/><rect x="5.5" y="4" width="3" height="9" rx="1" fill="rgba(70,60,40,0.55)"/><rect x="10" y="1" width="3" height="12" rx="1" fill="rgba(70,60,40,0.55)"/></svg>
+                      Progress
+                    </div>
+                    <div style={{ background: "rgba(30,30,42,0.03)", border: `1px solid ${C.border}`, borderRadius: 14, padding: "4px 9px", fontFamily: T.sans, fontSize: 10, color: "#3A3A50", display: "flex", alignItems: "center", gap: 3 }}>
+                      <svg width="9" height="9" viewBox="0 0 14 14" fill="none"><path d="M1 7C1 3.686 3.686 1 7 1s6 2.686 6 6-2.686 6-6 6S1 10.314 1 7Z" stroke="rgba(70,60,40,0.55)" strokeWidth="1.3"/><path d="M7 4v3l2 2" stroke="rgba(70,60,40,0.55)" strokeWidth="1.3" strokeLinecap="round"/></svg>
+                      Journey
+                    </div>
                   </div>
                 </div>
-                <p style={{ fontFamily: T.sans, fontSize: 11, color: "#2A2640", fontWeight: 600, margin: "0 0 3px" }}>Alex's program · Week 1</p>
-                <p style={{ fontFamily: T.sans, fontSize: 15, fontWeight: 700, color: "#1E1E2A", margin: "0 0 4px", letterSpacing: -0.3 }}>Build stakeholder visibility</p>
-                <p style={{ fontFamily: T.sans, fontSize: 11, color: "#5C5C6E", margin: "0 0 12px" }}><span style={{ fontWeight: 700, fontSize: 10, textTransform: "uppercase", letterSpacing: "0.05em", color: "#8A7830" }}>Goal </span>Get promoted to Senior PM</p>
-                {/* Stats pills */}
-                <div style={{ display: "flex", gap: 6 }}>
-                  {[
-                    { icon: "✦", val: "24", label: "Sparks", bg: "#fff", border: "rgba(200,150,30,0.3)" },
-                    { icon: "🔥", val: "3", label: "streak", bg: "rgba(251,191,36,0.12)", border: "rgba(180,140,20,0.2)" },
-                    { icon: null, val: "2", label: "this week", bg: "rgba(30,30,42,0.04)", border: "rgba(30,30,42,0.1)" },
-                  ].map((p, i) => (
-                    <div key={i} style={{ height: 46, padding: "0 10px", borderRadius: 13, background: p.bg, border: `1px solid ${p.border}`, display: "flex", alignItems: "center", gap: 6 }}>
-                      {p.icon && <span style={{ fontSize: 12 }}>{p.icon}</span>}
-                      <div>
-                        <p style={{ fontFamily: T.sans, fontSize: 13, fontWeight: 800, color: "#1E1E2A", margin: 0, lineHeight: 1 }}>{p.val}</p>
-                        <p style={{ fontFamily: T.sans, fontSize: 9, color: "#6E5C3A", margin: 0, textTransform: "uppercase", letterSpacing: 0.6, fontWeight: 600 }}>{p.label}</p>
-                      </div>
-                    </div>
-                  ))}
+                {/* Name + Goal — matches actual layout */}
+                <p style={{ fontFamily: T.sans, fontSize: 11, color: "#D49518", fontWeight: 600, margin: "0 0 3px", letterSpacing: -0.2 }}>Alex's program</p>
+                <p style={{ fontFamily: T.sans, fontSize: 16, fontWeight: 700, color: "#1E1E2A", margin: "0 0 3px", letterSpacing: -0.3, lineHeight: 1.35 }}>Get promoted to Senior PM</p>
+                <div style={{ display: "inline-flex", alignItems: "center", gap: 4, marginTop: 5, padding: "3px 9px", borderRadius: 100, background: T.brandL, border: `1px solid ${T.brandMid}60` }}>
+                  <span style={{ fontFamily: T.sans, fontSize: 9, fontWeight: 700, color: "#92400E" }}>87d remaining</span>
+                  <span style={{ fontFamily: T.sans, fontSize: 8, color: T.muted }}>Jun 15</span>
                 </div>
               </div>
 
               {/* Dashboard body */}
-              <div style={{ background: C.offWhite, padding: "14px 18px" }}>
-                {/* Week day strip */}
-                <div style={{ display: "flex", gap: 4, marginBottom: 14 }}>
-                  {["Mon","Tue","Wed","Thu","Fri","Sat","Sun"].map((d, i) => (
-                    <div key={i} style={{ flex: 1, textAlign: "center" }}>
-                      <p style={{ fontFamily: T.sans, fontSize: 8, color: i === 0 ? C.accentD : "#9494A6", marginBottom: 4, fontWeight: i === 0 ? 700 : 400 }}>{d}</p>
-                      <div style={{ height: 26, borderRadius: 8, background: i === 0 ? T.brandL : "#F2F1F4", border: i === 0 ? `2px solid ${C.accentL}` : "2px solid transparent", display: "flex", alignItems: "center", justifyContent: "center", opacity: i > 1 ? 0.35 : 1 }}>
-                        {i === 0 && <div style={{ width: 5, height: 5, borderRadius: "50%", background: C.accentD }} />}
-                        {i === 1 && <span style={{ color: "#fff", fontSize: 9, fontWeight: 700 }}>✓</span>}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-
-                {/* Task card */}
-                <div style={{ background: "#fff", border: "1px solid #E6E4EE", borderRadius: 16, padding: "14px 16px", marginBottom: 10, boxShadow: "0 2px 8px rgba(26,23,48,0.04)" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-                    <span style={{ fontFamily: T.sans, fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.8, padding: "3px 9px", background: "#FFE4D4", color: "#9A3D20", border: "1.5px solid #E8A080", borderRadius: 5 }}>Apply</span>
-                    <span style={{ fontFamily: T.sans, fontSize: 10, color: "#5C5C6E" }}>30 min</span>
-                    <span style={{ fontFamily: T.sans, fontSize: 10, fontWeight: 700, color: C.accentD, marginLeft: "auto" }}>Day 2 · 1 task</span>
+              <div style={{ background: "#FAFAF8", padding: "12px 16px 14px" }}>
+                {/* Week header + day tiles — matches actual program grid */}
+                <div style={{ marginBottom: 12 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+                    <div style={{ width: 5, height: 5, borderRadius: "50%", background: T.brand, flexShrink: 0 }} />
+                    <span style={{ fontFamily: T.sans, fontSize: 9, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", color: T.brand }}>Week 1</span>
+                    <span style={{ fontFamily: T.sans, fontSize: 11, color: T.ink, fontWeight: 700 }}>Build stakeholder visibility</span>
+                    <span style={{ fontFamily: T.sans, fontSize: 10, color: T.muted, marginLeft: "auto" }}>2/7</span>
                   </div>
-                  <p style={{ fontFamily: T.sans, fontSize: 12, fontWeight: 700, color: "#1E1E2A", marginBottom: 6, lineHeight: 1.35 }}>Request a cross-functional meeting with the data team</p>
-                  <p style={{ fontFamily: T.sans, fontSize: 11, color: "#5C5C6E", marginBottom: 10, lineHeight: 1.6 }}>Stakeholder visibility starts with showing up in rooms you're not yet in.</p>
-                  {/* Steps */}
-                  <div style={{ background: "#FFE4D4", borderRadius: 7, padding: "8px 10px" }}>
-                    {["Draft a 2-line agenda", "Send the calendar invite", "Prep one insight to share"].map((s, i) => (
-                      <div key={i} style={{ display: "flex", gap: 8, alignItems: "flex-start", marginBottom: i < 2 ? 6 : 0 }}>
-                        <div style={{ width: 13, height: 13, borderRadius: 3, border: "1.5px solid #E8A080", background: "#fff", flexShrink: 0, marginTop: 1 }} />
-                        <p style={{ fontFamily: T.sans, fontSize: 10, color: "#2A2640", lineHeight: 1.4, margin: 0 }}>{s}</p>
+                  <div style={{ display: "flex", gap: 4 }}>
+                    {["Mon","Tue","Wed","Thu","Fri","Sat","Sun"].map((d, i) => (
+                      <div key={i} style={{ flex: 1, textAlign: "center" }}>
+                        <p style={{ fontFamily: T.sans, fontSize: 9, color: i === 2 ? T.brand : T.ink, margin: "0 0 3px", fontWeight: i === 2 ? 700 : 500 }}>{d}</p>
+                        <div style={{
+                          height: 26, borderRadius: 7,
+                          background: i < 2 ? "#E8A820" : i === 2 ? T.brandL : "#F2F1F4",
+                          border: i === 2 ? `2px solid ${T.brandMid}` : "2px solid transparent",
+                          display: "flex", alignItems: "center", justifyContent: "center",
+                          opacity: i > 2 ? 0.3 : 1,
+                        }}>
+                          {i < 2 && <span style={{ color: "#fff", fontSize: 10, fontWeight: 700 }}>✓</span>}
+                          {i === 2 && <div style={{ width: 4, height: 4, borderRadius: "50%", background: T.brand }} />}
+                          {i > 2 && <svg width="5" height="6" viewBox="0 0 8 9" fill="none"><rect x="0.5" y="3.5" width="7" height="5" rx="1.2" stroke="#C8C4DC" strokeWidth="1.1"/><path d="M2 3.5V2.5a2 2 0 0 1 4 0v1" stroke="#C8C4DC" strokeWidth="1.1" strokeLinecap="round"/></svg>}
+                        </div>
                       </div>
                     ))}
                   </div>
                 </div>
 
-                {/* Mr. Bril box */}
-                <div style={{ background: "#FDF8EC", border: "1.5px solid rgba(200,150,30,0.3)", borderRadius: 12, padding: "10px 12px", marginBottom: 10, display: "flex", alignItems: "center", gap: 10 }}>
-                  <MrBrilAvatar size={28} />
-                  <div style={{ flex: 1 }}>
-                    <p style={{ fontFamily: T.sans, fontSize: 10, fontWeight: 700, color: "#2A2640", margin: "0 0 2px" }}>Stuck on this one?</p>
-                    <p style={{ fontFamily: T.sans, fontSize: 10, color: "#5C5C6E", margin: 0 }}>Talk to Mr. Bril →</p>
+                {/* Mr. Bril invite strip — matches actual */}
+                <div style={{ background: "#FFFDF7", border: `1.5px solid ${T.brandMid}50`, borderRadius: 12, padding: "9px 12px", marginBottom: 10, display: "flex", alignItems: "center", gap: 10 }}>
+                  <MrBrilAvatar size={24} />
+                  <p style={{ fontFamily: T.sans, fontSize: 10, color: "#2A2640", margin: 0, lineHeight: 1.45, flex: 1 }}>
+                    I picked today's tasks based on where you are. <span style={{ color: "#D49518", fontWeight: 600 }}>Let's fine-tune it →</span>
+                  </p>
+                </div>
+
+                {/* Daily progress bar — matches actual */}
+                <div style={{ marginBottom: 10, display: "flex", alignItems: "center", gap: 8 }}>
+                  <div style={{ flex: 1, height: 7, background: T.border, borderRadius: 4, overflow: "hidden", position: "relative" }}>
+                    <div style={{ position: "absolute", left: "12.5%", top: -1, bottom: -1, width: 1.5, background: T.brandD, borderRadius: 1, zIndex: 2 }} />
+                    <div style={{ height: "100%", borderRadius: 3, background: "linear-gradient(90deg, #E8A820 0%, #D49518 100%)", width: "8%", transition: "width 0.4s ease" }} />
+                  </div>
+                  <span style={{ fontFamily: T.sans, fontSize: 10, fontWeight: 600, color: T.brandD, whiteSpace: "nowrap" }}>1 done</span>
+                </div>
+
+                {/* Completed task — collapsed one-liner */}
+                <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 2px", marginBottom: 8 }}>
+                  <div style={{ width: 16, height: 16, borderRadius: "50%", background: "#D4D4D4", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                    <svg width="8" height="6" viewBox="0 0 10 8" fill="none"><path d="M1 4l2.5 2.5L9 1" stroke="#fff" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                  </div>
+                  <span style={{ fontFamily: T.sans, fontSize: 10, color: "#B0B0B8", textDecoration: "line-through", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>Read · Audit how your team tracks PM contributions</span>
+                  <span style={{ fontFamily: T.sans, fontSize: 9, color: "#C8C8D0", flexShrink: 0 }}>5 min</span>
+                </div>
+
+                {/* Active task card — matches actual with checkbox steps */}
+                <div style={{ background: "#fff", border: `1.5px solid ${T.brandMid}`, borderRadius: 16, padding: "12px 14px", marginBottom: 8, boxShadow: "0 4px 20px rgba(232,168,32,0.10)" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 8 }}>
+                    <span style={{ fontFamily: T.sans, fontSize: 8, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.8, padding: "3px 8px", background: "#FFE4D4", color: "#9A3D20", border: "1.5px solid #E8A080", borderRadius: 5 }}>Apply</span>
+                    <span style={{ fontFamily: T.sans, fontSize: 10, color: "#5C5C6E" }}>10 min</span>
+                    <span style={{ fontFamily: T.sans, fontSize: 9, color: T.muted, marginLeft: "auto" }}>Task 2</span>
+                  </div>
+                  {/* Steps with checkbox indicators — matches actual */}
+                  <div style={{ background: "#FFE4D440", borderRadius: 10, padding: "3px 0", marginBottom: 10, border: "1px solid #E8A08030" }}>
+                    {[
+                      { text: "Draft a 2-line agenda for the meeting", done: true, next: false },
+                      { text: "Send the calendar invite to the data team lead", done: false, next: true },
+                      { text: "Prep one insight from your last sprint to share", done: false, next: false },
+                    ].map((s, i) => (
+                      <div key={i} style={{ display: "flex", gap: 8, alignItems: "flex-start", padding: "8px 10px", margin: "0 3px", borderRadius: 7, background: s.next ? "#FFE4D4" : "transparent", borderBottom: i < 2 ? "1px solid #E8A08018" : "none" }}>
+                        <div style={{
+                          width: 17, height: 17, borderRadius: 4,
+                          border: `1.5px solid ${s.done ? "#9A3D20" : s.next ? "#E8A080" : T.border}`,
+                          background: s.done ? "#9A3D20" : "#fff",
+                          display: "flex", alignItems: "center", justifyContent: "center",
+                          flexShrink: 0, marginTop: 1,
+                          boxShadow: s.next ? "0 0 0 2px #E8A08030" : "none",
+                        }}>
+                          {s.done && <svg width="8" height="7" viewBox="0 0 12 10" fill="none"><path d="M1 5l3.5 3.5L11 1" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/></svg>}
+                        </div>
+                        <div style={{ flex: 1 }}>
+                          <p style={{ fontFamily: T.sans, fontSize: 10, color: s.done ? T.muted : s.next ? "#1E1E2A" : T.body, lineHeight: 1.4, margin: 0, fontWeight: s.next ? 600 : 400, textDecoration: s.done ? "line-through" : "none" }}>{s.text}</p>
+                          {s.next && <p style={{ fontFamily: T.sans, fontSize: 8, color: "#9A3D20", margin: "1px 0 0", fontWeight: 500 }}>Tap to check off</p>}
+                        </div>
+                      </div>
+                    ))}
+                    {/* Step micro-progress */}
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 5, padding: "0 10px 6px" }}>
+                      <div style={{ flex: 1, height: 3, background: "#E8A08030", borderRadius: 2, overflow: "hidden" }}>
+                        <div style={{ height: "100%", borderRadius: 2, background: "#E8A080", width: "33%" }} />
+                      </div>
+                      <span style={{ fontFamily: T.sans, fontSize: 9, fontWeight: 600, color: T.muted }}>1/3</span>
+                    </div>
+                  </div>
+                  {/* Done button — disabled state */}
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <div style={{ flex: 2, background: "#D4D4D8", borderRadius: 50, padding: "8px 0", textAlign: "center", fontFamily: T.sans, fontSize: 11, fontWeight: 600, color: "#9CA3AF", opacity: 0.7 }}>
+                      Complete all steps first
+                    </div>
+                    <div style={{ flex: 1, background: "rgba(30,30,42,0.03)", border: `1px solid ${C.border}`, borderRadius: 50, padding: "8px 0", textAlign: "center", fontFamily: T.sans, fontSize: 10, fontWeight: 500, color: T.muted }}>
+                      Schedule for later
+                    </div>
                   </div>
                 </div>
 
-                {/* Completion */}
-                <div style={{ background: "#fff", borderRadius: 14, padding: "12px 14px", border: "1.5px solid #E6E4EE" }}>
-                  <p style={{ fontFamily: "Georgia, serif", fontSize: 13, color: "#2A2640", marginBottom: 10, fontWeight: 400 }}>Did you complete today's task?</p>
-                  <div style={{ display: "flex", gap: 8 }}>
-                    <div style={{ flex: 1, background: "#D49518", color: "#fff", borderRadius: 50, padding: "8px 0", fontFamily: T.sans, fontSize: 11, fontWeight: 700, textAlign: "center" }}>Yes, done</div>
-                    <div style={{ flex: 0.6, background: C.offWhite, color: "#5C5C6E", border: "1px solid rgba(30,30,42,0.18)", borderRadius: 50, padding: "8px 0", fontFamily: T.sans, fontSize: 11, textAlign: "center" }}>Not today</div>
+                {/* Locked task placeholder — matches actual blurred style */}
+                <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 12px", borderRadius: 10, border: `1.5px solid ${T.border}`, background: "#fff", position: "relative", overflow: "hidden" }}>
+                  <div style={{ position: "absolute", inset: 0, zIndex: 2, background: "rgba(255,255,255,0.5)", backdropFilter: "blur(3px)", WebkitBackdropFilter: "blur(3px)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 4, background: "rgba(255,255,255,0.85)", padding: "3px 10px", borderRadius: 12 }}>
+                      <svg width="10" height="10" viewBox="0 0 24 24" fill="none"><rect x="3" y="11" width="18" height="11" rx="2.5" stroke={T.muted} strokeWidth="1.8"/><path d="M7 11V7a5 5 0 0 1 10 0v4" stroke={T.muted} strokeWidth="1.8" strokeLinecap="round"/></svg>
+                      <span style={{ fontFamily: T.sans, fontSize: 10, fontWeight: 600, color: T.muted }}>Complete current task</span>
+                    </div>
                   </div>
+                  <span style={{ fontFamily: T.sans, fontSize: 8, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.8, padding: "2px 6px", background: "#D2E8D8", color: "#3B7A56", border: "1px solid #A8D4B4", borderRadius: 4, flexShrink: 0, zIndex: 1 }}>Reflect</span>
+                  <span style={{ fontFamily: T.sans, fontSize: 10, color: T.body, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", zIndex: 1 }}>Write down three things you learned from...</span>
+                  <span style={{ fontFamily: T.sans, fontSize: 9, color: T.muted, flexShrink: 0, zIndex: 1 }}>8 min</span>
                 </div>
               </div>
             </div>
@@ -2677,11 +2722,11 @@ function LandingPage({ onStart, onResume, savedPlan }) {
       <footer style={{ background: C.offWhite, borderTop: `1px solid ${C.border}`, padding: "32px clamp(16px,5vw,40px)" }}>
         <div className="sa-footer-inner" style={{ maxWidth: 1080, margin: "0 auto", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 16 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
-            <img src={LOGO_SRC} alt="Be Brilliant" width={24} height={24} style={{ borderRadius: 5, display: "block" }} />
-            <span style={{ fontFamily: T.sans, fontSize: 15, fontWeight: 700, color: C.ink, letterSpacing: "-0.3px" }}>Be Brilliant</span>
+            <img src={LOGO_SRC} alt="BeBrilliant" width={24} height={24} style={{ borderRadius: 5, display: "block" }} />
+            <span style={{ fontFamily: T.sans, fontSize: 15, fontWeight: 700, color: C.ink, letterSpacing: "-0.3px" }}>BeBrilliant</span>
           </div>
           <span style={{ fontFamily: T.sans, fontSize: 15, color: C.muted, fontWeight: 400 }}>
-            Turns out it's mostly structure
+            Master the art of the follow through
           </span>
         </div>
       </footer>
@@ -2693,7 +2738,7 @@ function LandingPage({ onStart, onResume, savedPlan }) {
 
 // ─── Quiz , Lovable-style clean cards ───────────────────
 function QuizScreen({ onComplete, onBack }) {
-  useSEO({ title: "Career Assessment", description: "Take a 3-minute career assessment to get your personalised Be Brilliant program. 7 questions, zero fluff.", path: "/quiz", noIndex: true });
+  useSEO({ title: "Career Assessment", description: "Take a 3-minute career assessment to get your personalised BeBrilliant program. 7 questions, zero fluff.", path: "/quiz", noIndex: true });
   const [current, setCurrent] = useState(0);
   const [answers, setAnswers] = useState({});
   const answersRef = React.useRef({});
@@ -2701,7 +2746,6 @@ function QuizScreen({ onComplete, onBack }) {
   const [fade, setFade] = useState(true);
   // showingSubRole: true when we're on the sub-role question (between Q1 and Q2)
   const [showingSubRole, setShowingSubRole] = useState(false);
-  const [showProfileMoment, setShowProfileMoment] = useState(false);
   const [showingGoalDetail, setShowingGoalDetail] = useState(false);
   const [showingGoalDirection, setShowingGoalDirection] = useState(false);
   const [history, setHistory] = useState([]); // stack of {current, showingSubRole, showingGoalDetail, showingGoalDirection}
@@ -3117,195 +3161,6 @@ function generatePersonalisedBullets(plan) {
   return bullets.slice(0, 3);
 }
 
-function ResultsScreen({ plan, brilInsight, onRestart, onDashboard }) {
-  useSEO({ title: `Your Profile: ${plan.profileName || "Results"}`, description: `You're ${plan.profileName}. See your personalised 8-week career development plan from Be Brilliant.`, path: "/results", noIndex: true });
-  const [visible, setVisible] = useState(false);
-  const [email, setEmail] = useState("");
-  const [submitted, setSubmitted] = useState(false);
-  const n = plan.narrative;
-  const displayExposure = plan.aiExposureCommentary || null;
-  useEffect(() => { setTimeout(() => setVisible(true), 100); }, []);
-
-  const tagColors = {
-    "Apply":   { bg: "#FFE4D4", text: "#9A3D20", border: "#E8A080" },
-    "Reflect": { bg: "#F4EDF8", text: "#6B3880", border: "#CCAADC" },
-    "Read":    { bg: "#E8F0FF", text: "#3355AA", border: "#A8C0F0" },
-    "Tool":    { bg: "#E6F5EE", text: "#2A6B45", border: "#90CCA8" },
-  };
-
-  // Compute a simple exposure score (0–100) from taskAnalysis
-  const avgScore = plan.taskAnalysis.length > 0
-    ? Math.round(plan.taskAnalysis.reduce((s, t) => s + t.score, 0) / plan.taskAnalysis.length)
-    : null;
-  const exposureLabel = avgScore == null ? null
-    : avgScore >= 65 ? `High exposure (${avgScore}/100)`
-    : avgScore >= 40 ? `Significant exposure (${avgScore}/100)`
-    : `Moderate exposure (${avgScore}/100)`;
-  const exposureColor = avgScore == null ? T.muted
-    : avgScore >= 65 ? "#C05621"
-    : avgScore >= 40 ? "#92400E"
-    : "#0F6E56";
-  const exposureBorderColor = avgScore == null ? T.border
-    : avgScore >= 65 ? "#FED7AA"
-    : avgScore >= 40 ? "#FEF3C7"
-    : "#A7F3D0";
-  const exposureBg = avgScore == null ? "#fff"
-    : avgScore >= 65 ? "#FFF7ED"
-    : avgScore >= 40 ? "#FFFBEB"
-    : "#ECFDF5";
-
-  return (
-    <div style={{ background: C.offWhite, opacity: visible ? 1 : 0, transition: "opacity 0.5s" }}>
-      <div style={{ maxWidth: 600, margin: "0 auto", padding: "clamp(24px, 5vw, 52px) clamp(16px, 4vw, 24px) 80px" }}>
-
-        {/* ── PROFILE BADGE ── */}
-        <div style={{ textAlign: "center", marginBottom: 28, animation: "pop 0.5s ease" }}>
-          <div style={{ display: "inline-block", width: "100%", maxWidth: 400, padding: "26px 26px 22px", background: T.brandL, border: `1.5px solid ${T.brandMid}`, borderRadius: 20, boxShadow: T.shadow, position: "relative", overflow: "hidden" }}>
-            {/* Floating shapes */}
-            <div style={{ position: "absolute", top: 8, right: "8%", width: 36, height: 36, borderRadius: 10, background: T.brandMid, pointerEvents: "none", opacity: 0.3, animation: "float1 6s ease-in-out infinite" }} />
-            <div style={{ position: "absolute", top: "40%", right: "2%", width: 18, height: 18, borderRadius: "50%", background: T.brand, pointerEvents: "none", opacity: 0.2, animation: "sparkle 4s ease-in-out infinite 1s" }} />
-            <div style={{ position: "absolute", bottom: 10, left: "5%", width: 24, height: 24, borderRadius: 7, background: T.brandMid, pointerEvents: "none", opacity: 0.25, animation: "float2 7s ease-in-out infinite 0.5s" }} />
-            <div style={{ position: "absolute", top: 10, left: "18%", width: 14, height: 14, borderRadius: "50%", background: T.brand, pointerEvents: "none", opacity: 0.2, animation: "sparkle 3.5s ease-in-out infinite 2s" }} />
-            {plan.name && (
-              <p style={{ fontFamily: T.serif, fontSize: "clamp(26px, 4.5vw, 34px)", fontWeight: 400, color: T.ink, margin: "0 0 4px", lineHeight: 1.15, letterSpacing: -0.3, position: "relative", zIndex: 1 }}>{plan.name.trim()}</p>
-            )}
-            <p style={{ fontFamily: T.sans, fontSize: 14, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", color: T.brandD, margin: 0, position: "relative", zIndex: 1 }}>your brilliant profile</p>
-          </div>
-        </div>
-
-        {/* ── WHY THIS PROGRAM + WEEK ARC ── */}
-        {/* ── PERSONALISED TRAITS ── */}
-        {(() => {
-          const bullets = generatePersonalisedBullets(plan);
-          if (!bullets.length) return null;
-          return (
-            <div style={{ background: "#fff", border: `1px solid ${T.border}`, borderRadius: 14, padding: "22px 24px", marginBottom: 28, boxShadow: T.shadow }}>
-              <p style={{ fontFamily: T.sans, fontSize: 12, fontWeight: 700, letterSpacing: 1.2, textTransform: "uppercase", color: T.brandD, margin: "0 0 16px" }}>What we picked up on 👀</p>
-              <ul style={{ margin: 0, padding: 0, listStyle: "none", display: "flex", flexDirection: "column", gap: 12 }}>
-                {bullets.map((b, i) => (
-                  <li key={i} style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
-                    <span style={{
-                      flexShrink: 0, marginTop: 4,
-                      width: 6, height: 6, borderRadius: "50%",
-                      background: T.brand, display: "inline-block",
-                    }} />
-                    <span style={{ fontFamily: T.sans, fontSize: 15, color: T.ink, lineHeight: 1.7 }}>{b}</span>
-                  </li>
-                ))}
-              </ul>
-              <p style={{ fontFamily: T.sans, fontSize: 16, color: T.body, margin: "18px 0 0", lineHeight: 1.55, fontStyle: "italic" }}>
-                We've tweaked everything to match. You'll see.
-              </p>
-            </div>
-          );
-        })()}
-
-        {/* ── WHAT MR. BRIL PICKED UP (from intro conversation) ── */}
-        {brilInsight && (
-          <div style={{ marginBottom: 28, background: "#fff", borderRadius: 14, border: `1px solid ${T.border}`, overflow: "hidden", boxShadow: T.shadow }}>
-            <div style={{ padding: "16px 20px", background: "rgba(232,168,32,0.06)", borderBottom: `1px solid rgba(232,168,32,0.12)`, display: "flex", alignItems: "center", gap: 12 }}>
-              <MrBrilAvatar size={28} />
-              <p style={{ fontFamily: T.sans, fontSize: 12, fontWeight: 700, letterSpacing: 1.2, textTransform: "uppercase", color: T.brandD, margin: 0 }}>What Mr Bril picked up</p>
-            </div>
-            <div style={{ padding: "16px 20px" }}>
-              <p style={{ fontFamily: T.sans, fontSize: 15, color: T.body, margin: 0, lineHeight: 1.65, fontStyle: "italic" }}>"{brilInsight}"</p>
-            </div>
-          </div>
-        )}
-
-        {/* ── WHY THIS PROGRAM, API-generated week arc only ── */}
-        {(() => {
-          const arc = plan.weekArc || {};
-          // Need at least 2 ability sentences
-          if (!arc.a1 || !arc.a2) return null;
-
-          const goalTexts = GOAL_TEXTS;
-          const goalText = plan._answers?.goal_custom || goalTexts[plan._answers?.goal];
-
-          // If deadline is ≤2 weeks, only show 2 steps; otherwise show up to 3
-          const deadlineDays = plan._goalDeadline ? Math.max(0, Math.ceil((new Date(plan._goalDeadline) - new Date()) / 86400000)) : null;
-          const maxSteps = (deadlineDays !== null && deadlineDays <= 14) ? 2 : 3;
-          const steps = [
-            { label: "Week 1", text: arc.a1 },
-            { label: "Week 2", text: arc.a2 },
-            ...(maxSteps >= 3 && arc.a3 ? [{ label: "Week 3", text: arc.a3 }] : []),
-          ];
-
-          return (
-            <div style={{ marginBottom: 28, background: "#fff", borderRadius: 14, border: `1px solid ${T.border}`, overflow: "hidden", boxShadow: T.shadow }}>
-              <div style={{ padding: "18px 20px", background: T.sageL, borderBottom: `1px solid ${T.sage}` }}>
-                <p style={{ fontFamily: T.sans, fontSize: 12, fontWeight: 700, letterSpacing: 1.2, textTransform: "uppercase", color: T.sageD, margin: "0 0 8px" }}>Why this program</p>
-                {goalText && <p style={{ fontFamily: T.serif, fontSize: 18, color: T.ink, margin: 0, lineHeight: 1.5, fontWeight: 400, fontStyle: "italic" }}>{goalText}</p>}
-              </div>
-              <div style={{ padding: "4px 20px 8px", display: "flex", flexDirection: "column" }}>
-                {steps.map((w, i) => (
-                  <div key={i} style={{ display: "flex", gap: 14, alignItems: "flex-start", padding: "13px 0", borderBottom: i < steps.length - 1 ? `1px solid ${T.border}` : "none" }}>
-                    <div style={{ minWidth: 52, flexShrink: 0 }}>
-                      <span style={{ fontFamily: T.sans, fontSize: 12, fontWeight: 700, letterSpacing: 0.8, textTransform: "uppercase", color: T.brandD, display: "block", paddingTop: 2 }}>{w.label}</span>
-                    </div>
-                    <p style={{ fontFamily: T.sans, fontSize: 16, color: T.body, margin: 0, lineHeight: 1.65 }}>{w.text}</p>
-                  </div>
-                ))}
-              </div>
-            </div>
-          );
-        })()}
-
-        {/* ── EMAIL CTA ── */}
-        <div style={{ background: "#fff", borderRadius: 24, padding: "clamp(28px,5vw,44px) clamp(20px,4vw,32px)", textAlign: "center", marginBottom: 28, position: "relative", overflow: "hidden", border: `2px solid ${T.brand}`, boxShadow: "0 8px 40px rgba(232,168,32,0.12), 0 0 0 4px rgba(232,168,32,0.06)" }}>
-          {/* Warm ambient glow behind content */}
-          <div style={{ position: "absolute", top: "-20%", left: "50%", transform: "translateX(-50%)", width: 350, height: 250, borderRadius: "50%", background: "radial-gradient(circle, rgba(232,168,32,0.06) 0%, transparent 70%)", pointerEvents: "none" }} />
-          {/* Floating shapes, warm brand tones */}
-          <div style={{ position: "absolute", top: 14, right: "7%", width: 36, height: 36, borderRadius: 10, background: T.brandMid, pointerEvents: "none", opacity: 0.2, animation: "float1 6s ease-in-out infinite" }} />
-          <div style={{ position: "absolute", bottom: 18, left: "5%", width: 24, height: 24, borderRadius: "50%", background: T.brand, pointerEvents: "none", opacity: 0.15, animation: "sparkle 4s ease-in-out infinite 1.2s" }} />
-          <div style={{ position: "absolute", top: "50%", right: "3%", width: 14, height: 14, borderRadius: 4, background: T.brandMid, pointerEvents: "none", opacity: 0.2, animation: "float2 7s ease-in-out infinite 0.8s" }} />
-          <div style={{ position: "relative", zIndex: 1 }}>
-          {!submitted ? (
-            <>
-              <div style={{ fontSize: 36, marginBottom: 16 }}>✦</div>
-              <h2 style={{ fontFamily: T.serif, fontSize: "clamp(24px,4vw,32px)", fontWeight: 400, color: T.ink, margin: "0 0 10px", lineHeight: 1.2, letterSpacing: -0.4 }}>
-                Ready to start?
-              </h2>
-              <p style={{ fontFamily: T.sans, fontSize: 15, color: T.body, margin: "0 0 28px", lineHeight: 1.65 }}>
-                Your daily program gets smarter as you progress.
-              </p>
-              <button
-                onClick={() => { setSubmitted(true); setTimeout(() => onDashboard && onDashboard(Date.now()), 1500); }}
-                style={{
-                  width: "100%", maxWidth: 400,
-                  background: T.brand,
-                  color: "#1E1E2A",
-                  border: "none", fontFamily: T.sans, fontSize: 17, fontWeight: 700,
-                  padding: "17px 0", borderRadius: 50, cursor: "pointer",
-                  letterSpacing: -0.3, transition: "all 0.2s",
-                  boxShadow: "0 4px 20px rgba(232,168,32,0.3)",
-                }}>
-                Start my program →
-              </button>
-            </>
-          ) : (
-            <div style={{ textAlign: "center", padding: "20px 0", animation: "fadeIn 0.4s ease" }}>
-              <div style={{ fontSize: 40, marginBottom: 16 }}>✦</div>
-              <p style={{ fontFamily: T.serif, fontSize: 24, color: T.ink, margin: "0 0 8px", fontWeight: 400 }}>Brilliant. Let's do this.</p>
-              <p style={{ fontFamily: T.sans, fontSize: 14, color: T.muted, margin: 0 }}>Building your dashboard...</p>
-            </div>
-          )}
-          </div>
-        </div>
-
-        {/* ── FOOTER ── */}
-        <div style={{ textAlign: "center" }}>
-          <button onClick={onRestart} style={{ background: "none", border: "none", fontFamily: T.sans, fontSize: 13, color: T.muted, cursor: "pointer", textDecoration: "underline" }}>
-            Start over
-          </button>
-        </div>
-
-      </div>
-    </div>
-  );
-}
-
-
 // ─── AI Task Generation ────────────────────────────────────
 // Diagnostic: last error from AI task generation (read by GeneratingScreen)
 let _lastAITaskError = "";
@@ -3322,7 +3177,7 @@ async function generateAITasks(answers, auditTasks, classification, profileData,
     ? SUB_ROLE_QUESTIONS[answers.role].options[answers.role_detail]?.text || ""
     : "";
 
-  const timePref = "30 min"; // default, time question removed
+  const timePref = "2 hours"; // daily session length
 
   const ctx = {
     name:              answers.name || "",
@@ -3330,7 +3185,7 @@ async function generateAITasks(answers, auditTasks, classification, profileData,
     role_detail:       roleDetailText,
     seniority:         get("seniority", answers.seniority),
     readiness_level:   classification.readinessLevel || "medium",
-    time_available:    "30 min",
+    time_available:    "2 hours",
     goal_detail:       answers.goal_detail !== undefined ? ((GOAL_DETAIL_QUESTIONS[answers.goal])?.options?.[answers.goal_detail]?.text || "") : "",
     goal_direction:    (answers.goal_direction || "").trim(),
     career_situation:  "not specified",
@@ -3444,13 +3299,11 @@ ${templateSummary}
 
 ═══ TIME CALIBRATION ═══
 
-Each task must fit within 30 min. Every task must be completable in that window by someone doing it for the first time.
+This is the anchor task for a 2-hour daily session. The session will be broken into 12 progressive micro-tasks, but this task sets the direction.
 
-"30 min: one focused action with room for depth. Three to four steps."
-Good scope: read one specific article and write one sentence about what it changes for you. Identify three things in your role that are hardest to replicate. Send one email you have been avoiding. Map one real skill gap. Test one tool on one real piece of work. Write one paragraph you have been putting off.
-NOT OK: "explore", "research broadly", "think about your options", or anything that cannot be finished in a single sitting.
-
-Hard rule: if the task cannot be finished in the allotted time, cut scope. Smaller and done beats larger and abandoned.
+The anchor task itself should be a meaningful, focused career development action. Scope it for depth, not breadth.
+Good scope: identify three things in your role that are hardest to replicate. Map one real skill gap. Draft a positioning statement. Write a stakeholder email you have been putting off.
+NOT OK: "explore", "research broadly", "think about your options", or anything unfocused.
 
 ═══ INSTRUCTIONS ═══
 
@@ -3464,12 +3317,12 @@ Every task has 5 fields:
 
 "desc": 2-3 sentences. Name the specific action. Concrete, if less experienced, say exactly what to do; if senior, give the advanced move. Write in the profile's ${profileCopy.voice} voice and ${profileCopy.pacing} pacing.
 
-"steps", 2-3 steps for 15-min tasks, 3-4 steps for 30-min tasks, 4-5 steps for 45-60-min tasks. Match step count to the time budget. Each step is a single action with a clear stopping point, never multiple sub-actions or open-ended exploration.
+"steps", 3-4 steps. Each step is a single action with a clear stopping point, never multiple sub-actions or open-ended exploration.
 
 "whyBase": 1-2 sentences. Connect to their ultimate motivation: "${ctx.ultimate_why}". Use their actual words. One real, specific payoff, not generic.
 
 Every task must also:
-• Set the task's "time" field to "30 min"
+• Set the task's "time" field to "2 hours"
 • Never include any year or date. Use "recently", "now", "currently", or "latest" instead
 
 Writing style:
@@ -3499,10 +3352,10 @@ Also generate a "change_commentary" field: 2-3 sentences about which of their ac
 
 Respond with ONLY valid JSON, no preamble, no markdown fences:
 
-{"tasks":[{"tag":"Apply|Read|Reflect","time":"30 min","title":"...","context":"...","desc":"...","steps":[2-4 steps depending on time, each a single concrete action],"whyBase":"..."}],"outcomes":["...","...","..."],"change_commentary":"..."}`;
+{"tasks":[{"tag":"Apply|Read|Reflect","time":"2 hours","title":"...","context":"...","desc":"...","steps":[2-4 steps depending on time, each a single concrete action],"whyBase":"..."}],"outcomes":["...","...","..."],"change_commentary":"..."}`;
 
   // ── Prompt: no-audit path ─────────────────────────────────
-  const promptNoAudit = `You are generating exactly ONE personalized career development task for Day 1. Make it the most relevant, specific, actionable 30-minute task possible for this person.
+  const promptNoAudit = `You are generating exactly ONE personalized career development task for Day 1. Make it the most relevant, specific, actionable task possible for this person's 2-hour daily session.
 ${TODAY_CONTEXT()}
 
 ═══ THEIR CAREER SITUATION ═══
@@ -3551,13 +3404,10 @@ ${templateSummary}
 
 ═══ TIME CALIBRATION ═══
 
-Each task must fit within 30 min. Every task must be completable in that window.
+This is the anchor task for a 2-hour daily session. The session will be broken into progressive micro-tasks, but this task sets the direction and depth.
 
-"30 min: one focused action with room for depth. Three to four steps."
-Good scope: read one specific article and write one sentence about what it changes for you. Identify three things in your role that are hardest to replicate. Send one email you have been avoiding. Map one real skill gap. Test one tool on one real piece of work. Write one paragraph you have been putting off.
-NOT OK: "explore", "research broadly", "think about your options", or anything requiring more than one sitting.
-
-Hard rule: if the task cannot be finished in 30 minutes, cut scope until it can.
+Good scope: identify three things in your role that are hardest to replicate. Map one real skill gap. Draft a positioning statement. Write a stakeholder email you have been putting off.
+NOT OK: "explore", "research broadly", "think about your options", or anything unfocused.
 
 ═══ INSTRUCTIONS ═══
 
@@ -3571,13 +3421,13 @@ Every task has 5 fields:
 
 "desc", 2-3 sentences. Name the specific action. Concrete, if less experienced, say exactly what to do; if senior, give the advanced move. Write in the profile's ${profileCopy.voice} voice and ${profileCopy.pacing} pacing.
 
-"steps", 2-3 steps for 15-min tasks, 3-4 steps for 30-min tasks, 4-5 steps for 45-60-min tasks. Match step count to the time budget. Each step is a single concrete action with a clear stopping point.
+"steps", 3-4 steps. Each step is a single concrete action with a clear stopping point.
 
 "whyBase", 1-2 sentences. Connect to their ultimate motivation: "${ctx.ultimate_why}". Use their actual words. One real, specific payoff, not generic.
 
 Every task must also:
 • Feel written for a ${ctx.seniority} ${ctx.role} specifically, not generic career advice
-• Set the task's "time" field to "30 min"
+• Set the task's "time" field to "2 hours"
 • Never include any year or date. Use "recently", "now", "currently", or "latest" instead
 
 Writing style:
@@ -3605,7 +3455,7 @@ Also generate an "outcomes" array: exactly 3 sentences describing what is concre
 
 Respond with ONLY valid JSON, no preamble, no markdown fences:
 
-{"tasks":[{"tag":"Apply|Read|Reflect","time":"30 min","title":"...","context":"...","desc":"...","steps":[2-4 steps depending on time, each a single concrete action],"whyBase":"..."}],"outcomes":["...","...","..."]}`;
+{"tasks":[{"tag":"Apply|Read|Reflect","time":"2 hours","title":"...","context":"...","desc":"...","steps":[2-4 steps depending on time, each a single concrete action],"whyBase":"..."}],"outcomes":["...","...","..."]}`;
 
   const prompt = hasAudit ? promptWithAudit : promptNoAudit;
 
@@ -3615,7 +3465,7 @@ Respond with ONLY valid JSON, no preamble, no markdown fences:
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "claude-sonnet-4-6",
+        model: MODEL_SMART,
         max_tokens: 4096,
         messages: [{ role: "user", content: prompt }],
       }),
@@ -3727,7 +3577,7 @@ Return ONLY valid JSON. a1/a2/a3 and mid/end MUST be included:
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "claude-sonnet-4-6",
+        model: MODEL_SMART,
         max_tokens: 1000,
         messages: [{ role: "user", content: prompt }],
       }),
@@ -3753,8 +3603,8 @@ function GeneratingScreen({ answers, auditTasks, brilInsight, onComplete, onBack
   const [failed, setFailed] = useState(false);
   const hasAudit = (auditTasks || []).filter(t => t && t.trim().length > 3).length > 0;
   const phases = hasAudit
-    ? ["Brilliant. Let's do this", "Reading your answers (no judgment)", "Analysing your work tasks (okay, a little judgment)", "Building something actually useful"]
-    : ["Brilliant. Let's do this", "Reading your answers (no judgment)", "Figuring out your type (in a nice way)", "Building something actually useful"];
+    ? ["Building your program", "Reading your answers (no judgment)", "Analysing your work tasks (okay, a little judgment)", "Designing your roadmap"]
+    : ["Building your program", "Reading your answers (no judgment)", "Figuring out your type (in a nice way)", "Designing your roadmap"];
 
   // Use refs to track intervals so retry properly clears previous ones
   const intervalsRef = useRef({ di: null, pi: null });
@@ -3788,28 +3638,27 @@ function GeneratingScreen({ answers, auditTasks, brilInsight, onComplete, onBack
       return;
     }
 
-    // Only generate the lightweight week arc (a1/a2/a3 for results page).
-    // Day 1 task generation is deferred to dashboard entry to save tokens.
+    // Only fire weekArc (Sonnet) here — Day 1 task + daily queue
+    // are generated on the dashboard with Haiku for faster perceived load.
     (async () => {
       try {
-        let arcResult = null;
-        try {
-          arcResult = await generateWeekArc(answers, cls, brilInsight);
-        } catch (arcErr) {
-          console.error("Week arc error (non-fatal):", arcErr);
-        }
+        const arcResult = await generateWeekArc(answers, cls, brilInsight).catch(e => {
+          console.error("Week arc error (non-fatal):", e);
+          return null;
+        });
 
         clearIntervals();
         onComplete({
           ...templatePlan,
           tasks: [],
           weekArc: arcResult || null,
+          _day1Queue: null,
         });
       } catch (err) {
         console.error("GeneratingScreen error:", err);
         clearIntervals();
         if (hasRetriedRef.current) {
-          onComplete({ ...templatePlan, tasks: [], weekArc: null });
+          onComplete({ ...templatePlan, tasks: [], weekArc: null, _day1Queue: null });
         } else {
           setErrorDetail(`Exception: ${err?.message || String(err)}`);
           setFailed(true);
@@ -3835,7 +3684,7 @@ function GeneratingScreen({ answers, auditTasks, brilInsight, onComplete, onBack
       <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "#fff" }}>
         <div style={{ textAlign: "center", maxWidth: 440, padding: "0 32px" }}>
           <p style={{ fontFamily: T.sans, fontSize: 18, fontWeight: 600, color: T.ink, margin: "0 0 8px" }}>Oops. Something broke. 🫠</p>
-          <p style={{ fontFamily: T.sans, fontSize: 14, color: T.muted, margin: "0 0 28px", lineHeight: 1.6 }}>Be Brilliant couldn't finish your plan. Check your connection and give it another go.</p>
+          <p style={{ fontFamily: T.sans, fontSize: 14, color: T.muted, margin: "0 0 28px", lineHeight: 1.6 }}>BeBrilliant couldn't finish your plan. Check your connection and give it another go.</p>
           <div style={{ display: "flex", gap: 10, justifyContent: "center", marginBottom: 28 }}>
             <button onClick={() => { hasRetriedRef.current = false; setRetryCount(0); run(); }}
               style={{ background: T.brand, color: "#fff", border: "none", fontFamily: T.sans, fontSize: 14, fontWeight: 600, padding: "13px 28px", borderRadius: 10, cursor: "pointer" }}>
@@ -3917,7 +3766,7 @@ What's making this feel urgent: ${lk(urgTexts, answers.urgency) || "not specifie
 Main blocker: ${( normalizeBlocker(answers.blocker).map(b => blockerTexts[b]).filter(Boolean).join("; ") || "something gets in the way")}
 
 ═══ GOAL CONTEXT ═══
-Goal: ${(answers.goal_custom || lk(goalTexts, answers.goal)) || "move forward"}${goalDetailText ? ` (specifically: ${goalDetailText})` : ""}${goalDirection ? `\nTarget direction: ${goalDirection}` : ""}${goalStatementText ? `\nBe Brilliant-refined goal statement: "${goalStatementText}"` : ""}
+Goal: ${(answers.goal_custom || lk(goalTexts, answers.goal)) || "move forward"}${goalDetailText ? ` (specifically: ${goalDetailText})` : ""}${goalDirection ? `\nTarget direction: ${goalDirection}` : ""}${goalStatementText ? `\nBeBrilliant-refined goal statement: "${goalStatementText}"` : ""}
 
 ═══ THIS WEEK ═══
 Week 1 focus: "${week1Theme}"
@@ -3927,9 +3776,12 @@ Week 1 focus: "${week1Theme}"
 
 ═══ RULES ═══
 - CRITICAL: Every task must serve BOTH the goal AND the Week 1 focus ("${week1Theme}"). If a task doesn't clearly connect to both, rethink it.
+- GOAL LADDER: Each day is a rung. The person should see: Day → Week 1 theme ("${week1Theme}") → Overarching goal. Make the connection explicit in each task description.
+- INTERCONNECTED DAYS: Each day should reference the previous day's output. Day 3 builds on Day 2. Day 4 uses what Day 3 produced. Use language like "Using what you drafted on Day 3..." or "Building on the analysis from Day 4..."
 - What they're looking to change ("${lk(urgTexts, answers.urgency)}") must shape what the tasks are fundamentally about.
-- Each task is a standalone 30-minute career development action
+- Each task is the anchor task for a 2-hour daily career development session
 - Build progressively, each day deepens or extends the previous
+- Day 7 MUST FEEL LIKE A CULMINATION. It should synthesize or deliver a tangible output that represents the entire week's work coming together. Not a reflection — a deliverable that only exists because of Days 1–6.
 - NO AI tool tasks. Career development only: positioning, skills, visibility, decisions, relationships
 - Never repeat Day 1
 - Shape tasks around their approach preference (${stylePref}): ${stylePref.includes("action") ? "lead with doing, not reading" : stylePref.includes("context") ? "lead with context and frameworks before action" : "balance context and action"}
@@ -3939,12 +3791,12 @@ Week 1 focus: "${week1Theme}"
 
 Return ONLY valid JSON, no markdown:
 {"days":[
-  {"day":2,"tag":"Apply|Read|Reflect","time":"30 min","title":"...","desc":"...","steps":[2-4 steps depending on time, each a single concrete action],"whyBase":"..."},
-  {"day":3,"tag":"...","time":"30 min","title":"...","desc":"...","steps":[2-4 steps depending on time, each a single concrete action],"whyBase":"..."},
-  {"day":4,"tag":"...","time":"30 min","title":"...","desc":"...","steps":[2-4 steps depending on time, each a single concrete action],"whyBase":"..."},
-  {"day":5,"tag":"...","time":"30 min","title":"...","desc":"...","steps":[2-4 steps depending on time, each a single concrete action],"whyBase":"..."},
-  {"day":6,"tag":"...","time":"30 min","title":"...","desc":"...","steps":[2-4 steps depending on time, each a single concrete action],"whyBase":"..."},
-  {"day":7,"tag":"...","time":"30 min","title":"...","desc":"...","steps":[2-4 steps depending on time, each a single concrete action],"whyBase":"..."}
+  {"day":2,"tag":"Apply|Read|Reflect","time":"2 hours","title":"...","desc":"...","steps":[2-4 steps depending on time, each a single concrete action],"whyBase":"..."},
+  {"day":3,"tag":"...","time":"2 hours","title":"...","desc":"...","steps":[2-4 steps depending on time, each a single concrete action],"whyBase":"..."},
+  {"day":4,"tag":"...","time":"2 hours","title":"...","desc":"...","steps":[2-4 steps depending on time, each a single concrete action],"whyBase":"..."},
+  {"day":5,"tag":"...","time":"2 hours","title":"...","desc":"...","steps":[2-4 steps depending on time, each a single concrete action],"whyBase":"..."},
+  {"day":6,"tag":"...","time":"2 hours","title":"...","desc":"...","steps":[2-4 steps depending on time, each a single concrete action],"whyBase":"..."},
+  {"day":7,"tag":"...","time":"2 hours","title":"...","desc":"...","steps":[2-4 steps depending on time, each a single concrete action],"whyBase":"..."}
 ]}`;
 
   try {
@@ -3952,7 +3804,7 @@ Return ONLY valid JSON, no markdown:
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "claude-sonnet-4-6",
+        model: MODEL_FAST,
         max_tokens: 3000,
         messages: [{ role: "user", content: prompt }],
       }),
@@ -3972,7 +3824,363 @@ Return ONLY valid JSON, no markdown:
 }
 
 
-// ─── Week Batch Generator ────────────────────────────────────────────────────
+// ─── Daily Queue Generator ───────────────────────────────────────────────────
+// Generates a pool of 8 varied tasks for a single day.
+// Tasks vary in depth (5–25 min) but every STEP is ~5 min and produces a
+// concrete artifact, decision, or action. Steps are the unit of unlock.
+async function generateDailyQueue(plan, dayNum, dayStatus, dayNotes, dayTasks, brilInsight, carryoverTasks, isReduced, timeAvailable, dailyQueue, checkedSteps, phase, earlyTasks) {
+  // phase: "early" (warmup+build), "late" (deep+cooldown, earlyTasks optional for context), undefined (full — legacy)
+  // All phases use Haiku for speed — the anchor task (Sonnet) already carries personalization
+  const useModel = MODEL_FAST;
+  const answers = plan._answers || {};
+  const cl = plan.classification || {};
+  const arc = plan.weekArc || {};
+  const wkNum = Math.min(8, Math.ceil(dayNum / 7));
+  const wkTheme = [arc.w1,arc.w2,arc.w3,arc.w4,arc.w5,arc.w6,arc.w7,arc.w8][wkNum-1] || "Build momentum";
+  const subRole = answers.role_detail !== undefined && SUB_ROLE_QUESTIONS[answers.role]
+    ? SUB_ROLE_QUESTIONS[answers.role].options[answers.role_detail]?.text || "" : "";
+  const goalDetail = answers.goal_detail !== undefined
+    ? (GOAL_DETAIL_QUESTIONS[answers.goal])?.options?.[answers.goal_detail]?.text || "" : "";
+  const style = answers.style_outcome_process != null
+    ? (answers.style_outcome_process < 30 ? "action-oriented"
+      : answers.style_outcome_process < 50 ? "action-leaning"
+      : answers.style_outcome_process > 70 ? "understanding-oriented"
+      : "understanding-leaning") : "balanced";
+  const dayHist = Array.from({ length: Math.min(dayNum-1, 5) }, (_,i) => dayNum-1-i)
+    .filter(d => d >= 1).reverse()
+    .map(d => {
+      const ds = dayStatus[d]; const dt = dayTasks[d]; const dn = dayNotes[d]||"";
+      const queueForDay = dailyQueue?.[d] || [];
+      let taskDetail = dt?`"${dt.title}" [${dt.tag}]`:"unknown";
+      // If we have queue data, show what was actually completed vs skipped
+      if (queueForDay.length > 0) {
+        const completed = []; const incomplete = [];
+        queueForDay.forEach((t, ti) => {
+          const sc = checkedSteps?.[`${d}_${ti}`] || {};
+          const done = (t.steps || []).every((_, si) => sc[si]);
+          (done ? completed : incomplete).push(`"${t.title}" [${t.tag}] ${t.time}`);
+        });
+        taskDetail = `${completed.length}/${queueForDay.length} tasks done`;
+        if (completed.length > 0) taskDetail += ` — completed: ${completed.slice(0, 3).join("; ")}`;
+        if (incomplete.length > 0) taskDetail += ` — stopped before: ${incomplete.slice(0, 2).join("; ")}`;
+      }
+      return `Day ${d}: ${ds==='done'?'DONE':ds==='skipped'?'SKIPPED':'pending'} | ${taskDetail}${dn?` | Note: "${dn}"`:""}`;
+    }).join("\n");
+
+  // ── Carryover context: incomplete tasks from yesterday ──
+  const carryoverSection = (carryoverTasks && carryoverTasks.length > 0)
+    ? (() => {
+        const hasBonus = carryoverTasks.some(t => t.isBonusCarryover);
+        const hasUnfinished = carryoverTasks.some(t => !t.isBonusCarryover);
+        const unfinished = carryoverTasks.filter(t => !t.isBonusCarryover);
+        const bonus = carryoverTasks.filter(t => t.isBonusCarryover);
+        let section = "";
+        if (unfinished.length > 0) {
+          section += `\n═══ UNFINISHED FROM YESTERDAY (must include first) ═══\nThese ${unfinished.length} task(s) were NOT completed and the person did NOT hit their daily base goal. Include them as the FIRST tasks in today's queue.\n${unfinished.map((t, i) => `${i+1}. "${t.title}" [${t.tag}] ${t.time} — ${t.desc}`).join("\n")}`;
+        }
+        if (bonus.length > 0) {
+          section += `\n═══ BONUS SUGGESTIONS FROM YESTERDAY (optional, weave in if relevant) ═══\nThe person HIT their daily goal yesterday but didn't get to these bonus tasks. They are NOT failures — the person succeeded. Only include these if they naturally fit today's thread. Do NOT mark them as carryover or imply the person didn't finish.\n${bonus.map((t, i) => `${i+1}. "${t.title}" [${t.tag}] ${t.time}`).join("\n")}`;
+        }
+        const newTaskCount = Math.max(4, (isReduced ? 6 : 12) - unfinished.length);
+        if (unfinished.length > 0) section += `\nGenerate ${newTaskCount} NEW tasks after the unfinished carryover tasks.`;
+        return section;
+      })()
+    : "";
+
+  // ── Weekly goal tracking ──
+  const dayInWeek = ((dayNum - 1) % 7) + 1;
+  const weekStartDay = dayNum - dayInWeek + 1;
+  const daysCompletedThisWeek = Array.from({ length: dayInWeek - 1 }, (_, i) => weekStartDay + i)
+    .filter(d => dayStatus[d] === 'done').length;
+  const daysRemainingInWeek = 7 - dayInWeek + 1;
+  const weekProgressNote = dayInWeek > 1
+    ? `Day ${dayInWeek} of 7 this week. ${daysCompletedThisWeek} days completed so far. ${daysRemainingInWeek} days remaining to hit the weekly goal. ${daysCompletedThisWeek < dayInWeek - 1 ? "Behind pace — make today count." : "On track."}`
+    : "First day of the week.";
+
+  // ── Week goal risk assessment ──
+  const weekAtRisk = dayInWeek >= 4 && daysCompletedThisWeek < Math.floor((dayInWeek - 1) * 0.5);
+  const weekAssessment = weekAtRisk
+    ? `\n⚠ WEEK AT RISK: Only ${daysCompletedThisWeek}/${dayInWeek - 1} days done. The week theme "${wkTheme}" may not be achievable at full scope. ADAPT: focus today's tasks on the single highest-impact output for this week's theme. Skip breadth, go deep on what matters most.`
+    : "";
+
+  // ── Yesterday's session continuity: what was the last thing they worked on? ──
+  const prevDayNum = dayNum - 1;
+  const prevQueue = (dailyQueue && dailyQueue[prevDayNum]) || [];
+  let continuityNote = "";
+  if (prevQueue.length > 0 && dayStatus[prevDayNum] === 'done') {
+    const lastCompleted = [...prevQueue].reverse().find((t, i) => {
+      const ri = prevQueue.length - 1 - i;
+      const sc = (checkedSteps || {})[`${prevDayNum}_${ri}`] || {};
+      return (t.steps || []).every((_, si) => sc[si]);
+    });
+    const firstIncomplete = prevQueue.find((t, ti) => {
+      const sc = (checkedSteps || {})[`${prevDayNum}_${ti}`] || {};
+      return !(t.steps || []).every((_, si) => sc[si]);
+    });
+    if (lastCompleted) {
+      continuityNote = `\nCONTINUITY: Yesterday's last completed task was "${lastCompleted.title}" [${lastCompleted.tag}]. Today's warm-up should reference or build on that output.`;
+      if (firstIncomplete && !(carryoverTasks?.length)) {
+        continuityNote += ` They stopped before "${firstIncomplete.title}" — consider whether today's session should cover that ground.`;
+      }
+    }
+  }
+
+  // ── Task count: scale to session time, reduced for comeback ──
+  const sessionTime = timeAvailable || "2 hours";
+  const sessionMin = (() => { const m = String(sessionTime).match(/(\d+)\s*h/i); if (m) return parseInt(m[1]) * 60; const m2 = String(sessionTime).match(/(\d+)\s*min/i); if (m2) return parseInt(m2[1]); return 120; })();
+  const baseCount = Math.max(4, Math.round(sessionMin / 10)); // ~1 task per 10 min
+  const unfinishedCarryoverCount = carryoverTasks ? carryoverTasks.filter(t => !t.isBonusCarryover).length : 0;
+  const taskCount = isReduced ? Math.ceil(baseCount / 2) : (unfinishedCarryoverCount ? Math.max(4, baseCount - unfinishedCarryoverCount) : baseCount);
+
+  // ── Base threshold for this week (minutes) — determines base vs bonus split ──
+  const baseThresholds = { 1: 15, 2: 30, 3: 45, 4: 60, 5: 60, 6: 75, 7: 90, 8: 90 };
+  const baseMinutes = baseThresholds[Math.min(8, wkNum)] || 90;
+  const bonusMinutes = sessionMin - baseMinutes;
+
+  // ── Exact phase budgets (must sum to exactly sessionMin) ──
+  const warmupMin = Math.round(baseMinutes * 0.6); // Most of the base goal is warm-up
+  const buildMin = Math.round(baseMinutes * 0.4) + Math.round(bonusMinutes * 0.15); // Tail of base + start of bonus
+  const deepMin = Math.round(bonusMinutes * 0.55); // Bulk of bonus time
+  const cooldownMin = sessionMin - warmupMin - buildMin - deepMin; // Remainder to hit exactly sessionMin
+
+  // ── Day's anchor task = the daily objective. Queue tasks should build toward this. ──
+  const anchorTask = dayTasks?.[dayNum];
+  const dailyObjective = anchorTask
+    ? `\nDAILY OBJECTIVE: "${anchorTask.title}" — ${anchorTask.desc || ""}${anchorTask.whyBase ? `\nWhy: ${anchorTask.whyBase}` : ""}\nAll tasks in this session must build toward completing or advancing this day's objective. Warm-up primes it, build develops it, deep work produces the core output, cool-down locks it in. The session is not a random set of career tasks — it is a structured path to delivering this specific objective.`
+    : "";
+
+  // ── Mid-week recalibration: if behind, tighten the weekly theme to what's achievable ──
+  const midWeekRecalib = weekAtRisk
+    ? `\n⚠ MID-WEEK RECALIBRATION: The person has only completed ${daysCompletedThisWeek}/${dayInWeek - 1} days. The full weekly theme "${wkTheme}" is unlikely to be completed. For the remaining ${daysRemainingInWeek} days, NARROW the theme to one specific, achievable deliverable. Instead of broad exploration, pick the single highest-value output that still serves the overarching goal. Name this narrowed focus in today's tasks.`
+    : "";
+
+  // ── Phase-based prompt modifications ──
+  const phasePromptMod = (() => {
+    if (phase === "early") {
+      const earlyCount = Math.max(3, Math.ceil(taskCount * 0.45));
+      return `\nPHASE INSTRUCTION: Generate ONLY warm-up and build tasks (${earlyCount} tasks, totaling ${warmupMin + buildMin} min). Do NOT generate deep or cooldown tasks. Set difficulty to "warmup" or "build" only.`;
+    }
+    if (phase === "late") {
+      const lateCount = Math.max(2, taskCount - Math.ceil(taskCount * 0.45));
+      const earlyCtx = (earlyTasks || []).length > 0
+        ? `\n\nALREADY GENERATED (warmup+build tasks the person is working through now):\n${earlyTasks.map((t, i) => `${i+1}. [${t.tag}] "${t.title}" (${t.time}, ${t.difficulty})`).join("\n")}\n\nYour deep+cooldown tasks MUST build directly on the outputs from the tasks above.`
+        : `\nThe warmup+build tasks are being generated in parallel. Your deep+cooldown tasks should build toward the daily objective above. Reference the anchor task specifically.`;
+      return `\nPHASE INSTRUCTION: Generate ONLY deep work and cooldown tasks (${lateCount} tasks, totaling ${deepMin + cooldownMin} min). Do NOT generate warmup or build tasks. Set difficulty to "deep" or "cooldown" only.${earlyCtx}`;
+    }
+    return "";
+  })();
+
+  const prompt = `Generate ${phase === "early" ? Math.max(3, Math.ceil(taskCount * 0.45)) : phase === "late" ? Math.max(2, taskCount - Math.ceil(taskCount * 0.45)) : taskCount} career tasks as JSON for Day ${dayNum}. ${phase === "early" ? `STRICT TIME BUDGET: exactly ${warmupMin + buildMin} minutes total.` : phase === "late" ? `STRICT TIME BUDGET: exactly ${deepMin + cooldownMin} minutes total.` : `STRICT TIME BUDGET: exactly ${sessionMin} minutes total. Not approximately — exactly ${sessionMin} min.`} Add up every task's "time" field and it MUST equal ${phase === "early" ? warmupMin + buildMin : phase === "late" ? deepMin + cooldownMin : sessionMin}.
+${phasePromptMod}
+
+PERSON: ${plan.profileName} | ${ROLE_NAMES[answers.role]||"professional"}${subRole?` (${subRole})`:""} | ${SENIORITY_TEXTS[answers.seniority]||"mid-career"} | ${style} | Urgency: ${URG_TEXTS[answers.urgency]||"medium"}
+GOAL: ${answers.goal_custom||GOAL_TEXTS[answers.goal]||"move forward"}${goalDetail?` (${goalDetail})`:""}${plan._goalStatement?` → "${plan._goalStatement}"`:""}
+WEEK ${wkNum}: "${wkTheme}" | ${weekProgressNote}${weekAssessment}${midWeekRecalib}${brilInsight?`\nCOACHING: ${brilInsight.slice(0,200)}`:""}${dailyObjective}
+HISTORY: ${dayHist||"First day."}${continuityNote}${carryoverSection}
+
+GOAL LADDER (every task must visibly serve this chain):
+Task → Day objective${anchorTask ? ` ("${anchorTask.title}")` : ""} → Week theme ("${wkTheme}") → Goal ("${answers.goal_custom||GOAL_TEXTS[answers.goal]||"move forward"}")
+
+TIME BUDGET${phase === "early" ? ` (${warmupMin + buildMin} min — warmup + build only)` : phase === "late" ? ` (${deepMin + cooldownMin} min — deep + cooldown only)` : ` (exactly ${sessionMin} min, split into 4 phases — these are hard limits, not suggestions)`}:
+${phase !== "late" ? `Phase 1 WARM-UP: exactly ${warmupMin} min total across all warmup tasks. Use 5 min tasks (1 step each).
+Phase 2 BUILD: exactly ${buildMin} min total across all build tasks. Use 5-10 min tasks (1-2 steps each).` : ""}${phase !== "early" ? `${phase === "late" ? "" : "\n"}Phase 3 DEEP: exactly ${deepMin} min total across all deep tasks. Use 10-15 min tasks (2-3 steps). Set "parentTask" on grouped tasks.
+Phase 4 COOL-DOWN: exactly ${cooldownMin} min total across all cooldown tasks. Use 5-10 min tasks (1-2 steps each).` : ""}
+${phase !== "late" ? `\nBASE GOAL (first ${baseMinutes} min): The first ${baseMinutes} minutes of tasks (warm-up${buildMin > 0 ? " + early build" : ""}) are the person's "base goal" — the minimum daily commitment. Make these the most essential, highest-impact tasks.\n` : ""}
+STRICT ORDERING: Tasks MUST appear in phase sequence. Never mix phases.
+
+RULES:
+- HARD CONSTRAINT: All task "time" values must sum to EXACTLY ${phase === "early" ? warmupMin + buildMin : phase === "late" ? deepMin + cooldownMin : sessionMin} min. Use only values from: 5, 10, 15. Count them up before responding.
+- 5 min = 1 step. 10 min = 2 steps. 15 min = 3 steps.
+- Steps: concrete output (write/list/draft/send), never vague ("think about"). Sequential, not parallel.
+- Tags: Apply (making/doing), Read (short reads + takeaway), Reflect (written sense-making). No AI tool tasks.
+- Set "difficulty": ${phase === "early" ? '"warmup"|"build"' : phase === "late" ? '"deep"|"cooldown"' : '"warmup"|"build"|"deep"|"cooldown"'}.
+- Each task references previous task's output.
+
+JSON ONLY, no markdown: {"tasks":[{"tag":"Apply|Read|Reflect","time":"X min","title":"...","desc":"...","steps":["..."],"parentTask":"...(omit if standalone)","difficulty":"${phase === "early" ? "warmup|build" : phase === "late" ? "deep|cooldown" : "warmup|build|deep|cooldown"}","whyBase":"..."}]}`;
+
+  try {
+    const res = await fetch("/api/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: useModel,
+        max_tokens: phase ? 2000 : 3500,
+        messages: [{ role: "user", content: prompt }],
+      }),
+    });
+    if (!res.ok) throw new Error("API " + res.status);
+    const data = await res.json();
+    const text = extractText(data);
+    const start = text.indexOf("{"); const end = text.lastIndexOf("}");
+    if (start !== -1 && end !== -1) {
+      const parsed = JSON.parse(text.slice(start, end+1));
+      if (parsed.tasks?.length >= 1) {
+        // Sanitize: ensure every task has at least one step (prevents pre-completed state)
+        const sanitized = parsed.tasks.map(t => ({
+          ...t,
+          steps: (t.steps && t.steps.length > 0) ? t.steps : [t.desc || t.title || "Complete this task"],
+        }));
+
+        // ── TIME NORMALIZATION: enforce exact time budget for this phase ──
+        const phaseTargetMin = phase === "early" ? warmupMin + buildMin : phase === "late" ? deepMin + cooldownMin : sessionMin;
+        const parseMin = (s) => { const m = String(s||"").match(/(\d+)/); return m ? parseInt(m[1]) : 10; };
+        const rawTotal = sanitized.reduce((s, t) => s + parseMin(t.time), 0);
+        let normalized;
+        if (rawTotal !== phaseTargetMin && rawTotal > 0) {
+          const scale = phaseTargetMin / rawTotal;
+          normalized = sanitized.map(t => {
+            const raw = parseMin(t.time);
+            const scaled = Math.max(5, Math.round((raw * scale) / 5) * 5); // snap to 5-min increments
+            return { ...t, time: `${scaled} min` };
+          });
+          // Fix rounding error: adjust the longest task to hit exact total
+          const normTotal = normalized.reduce((s, t) => s + parseMin(t.time), 0);
+          const diff = phaseTargetMin - normTotal;
+          if (diff !== 0) {
+            // Find the deepest/longest task to absorb the rounding difference
+            let targetIdx = 0;
+            let maxTime = 0;
+            normalized.forEach((t, i) => { const tm = parseMin(t.time); if (tm > maxTime) { maxTime = tm; targetIdx = i; } });
+            const adjusted = Math.max(5, parseMin(normalized[targetIdx].time) + diff);
+            normalized[targetIdx] = { ...normalized[targetIdx], time: `${adjusted} min` };
+          }
+        } else {
+          normalized = sanitized;
+        }
+
+        // Only prepend UNFINISHED carryover for early/full phase (not late — carryover is always first)
+        const unfinishedCarryover = phase === "late" ? [] : (carryoverTasks || []).filter(t => !t.isBonusCarryover);
+        if (unfinishedCarryover.length > 0) {
+          // Carryover tasks keep their original times — reduce new tasks proportionally to stay within budget
+          const carryoverMin = unfinishedCarryover.reduce((s, t) => s + parseMin(t.time), 0);
+          const remainingBudget = Math.max(30, sessionMin - carryoverMin); // at least 30 min for new tasks
+          const newTotal = normalized.reduce((s, t) => s + parseMin(t.time), 0);
+          let finalNew = normalized;
+          if (newTotal > remainingBudget && newTotal > 0) {
+            const cutScale = remainingBudget / newTotal;
+            finalNew = normalized.map(t => {
+              const scaled = Math.max(5, Math.round((parseMin(t.time) * cutScale) / 5) * 5);
+              return { ...t, time: `${scaled} min` };
+            });
+            // Fix rounding
+            const fnTotal = finalNew.reduce((s, t) => s + parseMin(t.time), 0);
+            const fnDiff = remainingBudget - fnTotal;
+            if (fnDiff !== 0 && finalNew.length > 0) {
+              let ti = 0; let mx = 0;
+              finalNew.forEach((t, i) => { const tm = parseMin(t.time); if (tm > mx) { mx = tm; ti = i; } });
+              finalNew[ti] = { ...finalNew[ti], time: `${Math.max(5, parseMin(finalNew[ti].time) + fnDiff)} min` };
+            }
+          }
+          return [...unfinishedCarryover.map(t => ({ ...t, isCarryover: true, steps: (t.steps && t.steps.length > 0) ? t.steps : [t.desc || t.title || "Complete this task"] })), ...finalNew];
+        }
+        return normalized;
+      }
+    }
+  } catch (e) { console.error("generateDailyQueue failed:", e); }
+  return null;
+}
+
+// ─── Single Session Task Generator (Option A hybrid) ────────────────────────
+// Generates exactly ONE 5-10 min task, using Sonnet for quality.
+// Called: once at session start, then in background while user works on current task.
+async function generateSingleSessionTask(plan, dayNum, completedTasks, dayStatus, dayNotes, dayTasks, brilInsight, dailyQueue, checkedSteps) {
+  const answers = plan._answers || {};
+  const cl = plan.classification || {};
+  const arc = plan.weekArc || {};
+  const wkNum = Math.min(8, Math.ceil(dayNum / 7));
+  const wkTheme = [arc.w1,arc.w2,arc.w3,arc.w4,arc.w5,arc.w6,arc.w7,arc.w8][wkNum-1] || "Build momentum";
+  const subRole = answers.role_detail !== undefined && SUB_ROLE_QUESTIONS[answers.role]
+    ? SUB_ROLE_QUESTIONS[answers.role].options[answers.role_detail]?.text || "" : "";
+  const goalDetail = answers.goal_detail !== undefined
+    ? (GOAL_DETAIL_QUESTIONS[answers.goal])?.options?.[answers.goal_detail]?.text || "" : "";
+  const style = answers.style_outcome_process != null
+    ? (answers.style_outcome_process < 30 ? "action-oriented"
+      : answers.style_outcome_process < 50 ? "action-leaning"
+      : answers.style_outcome_process > 70 ? "understanding-oriented"
+      : "understanding-leaning") : "balanced";
+
+  // Session context: what the user has done so far today
+  const sessionSoFar = (completedTasks || []).map((t, i) => {
+    const reflection = dayNotes[`${dayNum}_task_${i}`] || "";
+    return `${i+1}. [${t.tag}] "${t.title}" (${t.time})${reflection ? ` — Reflection: "${reflection}"` : ""}`;
+  }).join("\n");
+
+  const taskNumber = (completedTasks || []).length + 1;
+  const minutesDone = (completedTasks || []).reduce((s, t) => {
+    const m = String(t.time||"").match(/(\d+)/); return s + (m ? parseInt(m[1]) : 5);
+  }, 0);
+
+  // Day history
+  const dayHist = Array.from({ length: Math.min(dayNum-1, 5) }, (_,i) => dayNum-1-i)
+    .filter(d => d >= 1).reverse()
+    .map(d => {
+      const ds = dayStatus[d]; const dt = dayTasks[d]; const dn = dayNotes[d]||"";
+      return `Day ${d}: ${ds==='done'?'DONE':ds==='skipped'?'SKIPPED':'pending'} | ${dt?`"${dt.title}" [${dt.tag}]`:"unknown"}${dn?` | Note: "${dn}"`:""}`;
+    }).join("\n");
+
+  // Anchor task
+  const anchorTask = dayTasks?.[dayNum];
+  const objective = anchorTask
+    ? `DAILY OBJECTIVE: "${anchorTask.title}" — ${anchorTask.desc || ""}${anchorTask.whyBase ? ` | Why: ${anchorTask.whyBase}` : ""}`
+    : "";
+
+  // Compute tag distribution to enforce variety
+  const tagCounts = (completedTasks || []).reduce((acc, t) => { acc[t.tag] = (acc[t.tag] || 0) + 1; return acc; }, {});
+  const overusedTag = Object.entries(tagCounts).find(([, c]) => c >= 2)?.[0] || null;
+  const tagVarietyRule = overusedTag
+    ? `- TAG VARIETY: You've already used "${overusedTag}" ${tagCounts[overusedTag]} times today. Do NOT use "${overusedTag}" for this task. Pick a different tag.`
+    : "- TAG VARIETY: Mix Apply, Read, and Reflect tasks throughout the session. Don't use the same tag twice in a row.";
+
+  const prompt = `Generate exactly ONE career development task for this person. Task #${taskNumber} in today's session.
+
+PERSON: ${plan.profileName} | ${ROLE_NAMES[answers.role]||"professional"}${subRole?` (${subRole})`:""} | ${SENIORITY_TEXTS[answers.seniority]||"mid-career"} | ${style} | Urgency: ${URG_TEXTS[answers.urgency]||"medium"}
+GOAL: ${answers.goal_custom||GOAL_TEXTS[answers.goal]||"move forward"}${goalDetail?` (${goalDetail})`:""}${plan._goalStatement?` → "${plan._goalStatement}"`:""}
+WEEK ${wkNum}: "${wkTheme}"
+${objective}
+${brilInsight?`COACHING: ${brilInsight.slice(0,200)}`:""}
+HISTORY: ${dayHist||"First day."}
+
+SESSION SO FAR (${minutesDone} min completed today):
+${sessionSoFar || "This is the first task of the day."}
+
+RULES:
+- Generate exactly 1 task, between 5-15 minutes.
+- ${taskNumber === 1 ? "This is the FIRST task — make it 5 min, a quick low-friction warm-up. 1 step only." : taskNumber === 2 ? "This is task 2 — 5-10 min, build on task 1's output. 1-2 steps." : taskNumber <= 4 ? "Early-mid session — 8-12 min, increasing depth. 2 steps." : "Deep session — 10-15 min, substantive and directly goal-tied. 2-3 steps."}
+- Steps must be concrete outputs (write/list/draft/send), never vague.
+${tagVarietyRule}
+- "parentTask": ONLY set this if the task is a sub-part of a multi-step activity happening TODAY (e.g. steps in a resume rewrite or a research deep-dive across multiple tasks). Do NOT set it to the person's overall career goal. Omit if the task is standalone.
+- Build directly on the previous task's output if possible. Reference what they did/reflected on.
+- Tags: Apply (making/doing), Read (short reads + takeaway), Reflect (written sense-making). No AI tool tasks.
+- Second person. Active voice. Short sentences. No em dashes.
+
+JSON ONLY, no markdown:
+{"tag":"Apply|Read|Reflect","time":"X min","title":"...","desc":"...","steps":["..."],"parentTask":"...(omit if standalone)","whyBase":"..."}`;
+
+  try {
+    const res = await fetch("/api/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: MODEL_SMART,
+        max_tokens: 800,
+        messages: [{ role: "user", content: prompt }],
+      }),
+    });
+    if (!res.ok) throw new Error("API " + res.status);
+    const data = await res.json();
+    const text = extractText(data);
+    const start = text.indexOf("{"); const end = text.lastIndexOf("}");
+    if (start !== -1 && end !== -1) {
+      const parsed = JSON.parse(text.slice(start, end+1));
+      // Ensure at least one step
+      if (!parsed.steps || parsed.steps.length === 0) {
+        parsed.steps = [parsed.desc || parsed.title || "Complete this task"];
+      }
+      return parsed;
+    }
+  } catch (e) { console.error("generateSingleSessionTask failed:", e); }
+  return null;
+}
 // Generates 7 tasks for a given week (e.g. Days 8-14 for Week 2).
 // Called when the previous week completes. Full history passed in.
 async function generateWeekBatch(plan, weekNum, startDay, dayTasks, dayStatus, dayNotes, brilInsight) {
@@ -3987,7 +4195,7 @@ async function generateWeekBatch(plan, weekNum, startDay, dayTasks, dayStatus, d
   const weekThemes = [arc.w1, arc.w2, arc.w3, arc.w4, arc.w5, arc.w6, arc.w7, arc.w8];
   const weekTheme = weekThemes[weekNum - 1] || (plan._adaptedWeekThemes || {})[weekNum] || "Continue building toward your goal";
 
-  // Goal: use Be Brilliant-refined goal statement if available, otherwise quiz goal
+  // Goal: use BeBrilliant-refined goal statement if available, otherwise quiz goal
   const goalStatementText = plan._goalStatement || "";
   const rawGoalText = answers.goal_custom || lk(goalTexts, answers.goal) || "move forward";
   const effectiveGoal = goalStatementText || rawGoalText;
@@ -4061,7 +4269,7 @@ Main blockers: ${blockerText}
 ═══ THEIR GOAL ═══
 Goal: "${effectiveGoal}"${goalDetailText ? ` (specifically: ${goalDetailText})` : ""}${goalDirection ? `\nTarget direction: ${goalDirection}` : ""}
 ${plan._goalDeadline ? `DEADLINE: ${plan._goalDeadline} (${Math.max(0, Math.ceil((new Date(plan._goalDeadline) - new Date()) / 86400000))} days remaining). This is time-bound. ${Math.ceil((new Date(plan._goalDeadline) - new Date()) / 86400000) <= 14 ? "URGENT: Less than 2 weeks left. Every task this week must directly advance the goal. Skip all foundation-building, go straight to output and action." : Math.ceil((new Date(plan._goalDeadline) - new Date()) / 86400000) <= 30 ? "PRESSING: Under a month. Front-load the most impactful tasks early this week." : "Deadline is set but not imminent. Maintain steady progress toward it."}` : ""}
-${brilInsight ? `\n═══ BE BRILLIANT COACHING CONTEXT ═══\nBe Brilliant (the person's AI thinking partner) observed the following from recent conversations. Use this to shape tasks, it reflects what the person actually said, not just what they entered in the quiz. If Bril's observations suggest a different direction, skill focus, or priority than the original plan, FOLLOW Be Brilliant's insight, it's more current than the quiz:\n${brilInsight}\n` : ""}
+${brilInsight ? `\n═══ BE BRILLIANT COACHING CONTEXT ═══\nBeBrilliant (the person's AI thinking partner) observed the following from recent conversations. Use this to shape tasks, it reflects what the person actually said, not just what they entered in the quiz. If Bril's observations suggest a different direction, skill focus, or priority than the original plan, FOLLOW BeBrilliant's insight, it's more current than the quiz:\n${brilInsight}\n` : ""}
 ═══ PLANNED ARC ═══
 ${allThemes}${cycleContext}
 ${weekNum > 8 ? `\nThis is Week ${weekNum} (Week ${weekInCycle} of Cycle ${cycleNum}). The person has continued beyond their first 8-week cycle. They may have kept their original goal or set a new one. Generate tasks that advance their current goal with the momentum they've built.` : ""}
@@ -4071,9 +4279,9 @@ The ${weekNum <= 8 ? "originally planned" : "suggested"} theme for Week ${weekNu
 ═══ THEME ADAPTATION INSTRUCTIONS ═══
 Evaluate whether "${weekTheme}" is still the right focus for Week ${weekNum}. Consider:
 - Did last week's performance reveal something the original plan didn't anticipate?
-- Did the person's notes or Be Brilliant conversations surface a more pressing priority?
+- Did the person's notes or BeBrilliant conversations surface a more pressing priority?
 - Is the person ahead of schedule (could skip to a harder theme) or behind (needs a consolidation week)?
-- Has their goal shifted or become more specific through Be Brilliant conversations?
+- Has their goal shifted or become more specific through BeBrilliant conversations?
 
 If the original theme still fits, keep it. If something better serves the person right now, write a new 4-7 word theme that:
 - Connects to their goal
@@ -4093,12 +4301,15 @@ ${history}${reflectionSummary}
 
 ═══ RULES ═══
 - CRITICAL: The goal ("${effectiveGoal}") must be the through-line, every task should visibly advance toward it.${goalDetailText ? ` The specific angle is: "${goalDetailText}".` : ""}${goalDirection ? ` They're targeting: "${goalDirection}".` : ""}
+- GOAL LADDER: Each day's task is a rung. The person should be able to see: Day → Week theme ("${weekTheme}") → Overarching goal ("${effectiveGoal}"). Make this connection explicit in each task's description or steps.
+- INTERCONNECTED DAYS: Days within the week should reference each other. Day 2 builds on Day 1's output. Day 3 uses what Day 2 produced. Later days should explicitly say things like "Using the draft you created on Day ${startDay + 1}..." or "Building on the gaps you identified on Day ${startDay + 2}..."
 - Day ${startDay} (the first task of this new week) is especially important: it must feel like a natural continuation of what came before, not a fresh start. Reference something specific from the previous week's completed tasks or notes. The person should feel seen, not reset.
+- Day ${startDay + 6} (DAY 7) MUST FEEL LIKE A CULMINATION. It should synthesize or deliver a tangible output that represents the entire week's work coming together. This is the payoff moment. Not a reflection — a deliverable that only exists because of Days 1–6.
 - Use the previous week performance signal above to calibrate difficulty and task length.
 - Build progressively on the history. Never repeat a completed task. Reference specific things from their notes.
 - All tasks should serve your chosen Week ${weekNum} theme (either the original or your adapted version)
 - Shape tasks around their approach preference (${stylePref}): ${stylePref.includes("action") ? "lead with doing, not reading" : stylePref.includes("understanding") ? "lead with context and frameworks before action" : "balance context and action"}.
-- Account for their blockers (${blockerText}): ${normalizeBlocker(answers.blocker).includes(0) ? "keep tasks tight, 30 min max" : ""}${normalizeBlocker(answers.blocker).includes(2) ? "every task needs a clear, concrete endpoint" : ""}${normalizeBlocker(answers.blocker).includes(3) ? "emphasize application over consumption" : ""}
+- Account for their blockers (${blockerText}): ${normalizeBlocker(answers.blocker).includes(0) ? "keep individual micro-tasks short and focused" : ""}${normalizeBlocker(answers.blocker).includes(2) ? "every task needs a clear, concrete endpoint" : ""}${normalizeBlocker(answers.blocker).includes(3) ? "emphasize application over consumption" : ""}
 - Career development only: positioning, skills, visibility, decisions, relationships
 - NO AI tool tasks (no ChatGPT, Claude, Copilot prompting tasks)
 - If many skips in history: reduce friction, shorter tasks, more concrete endpoints
@@ -4109,13 +4320,13 @@ ${history}${reflectionSummary}
 
 Return ONLY valid JSON, no markdown:
 {"adaptedTheme":"4-7 word theme for this week (can be the same as original if it still fits)","days":[
-  {"day":${startDay},"tag":"Apply|Read|Reflect","time":"30 min","title":"...","desc":"...","steps":[2-4 steps depending on time, each a single concrete action],"whyBase":"..."},
-  {"day":${startDay+1},"tag":"...","time":"30 min","title":"...","desc":"...","steps":[2-4 steps depending on time, each a single concrete action],"whyBase":"..."},
-  {"day":${startDay+2},"tag":"...","time":"30 min","title":"...","desc":"...","steps":[2-4 steps depending on time, each a single concrete action],"whyBase":"..."},
-  {"day":${startDay+3},"tag":"...","time":"30 min","title":"...","desc":"...","steps":[2-4 steps depending on time, each a single concrete action],"whyBase":"..."},
-  {"day":${startDay+4},"tag":"...","time":"30 min","title":"...","desc":"...","steps":[2-4 steps depending on time, each a single concrete action],"whyBase":"..."},
-  {"day":${startDay+5},"tag":"...","time":"30 min","title":"...","desc":"...","steps":[2-4 steps depending on time, each a single concrete action],"whyBase":"..."},
-  {"day":${startDay+6},"tag":"...","time":"30 min","title":"...","desc":"...","steps":[2-4 steps depending on time, each a single concrete action],"whyBase":"..."}
+  {"day":${startDay},"tag":"Apply|Read|Reflect","time":"2 hours","title":"...","desc":"...","steps":[2-4 steps depending on time, each a single concrete action],"whyBase":"..."},
+  {"day":${startDay+1},"tag":"...","time":"2 hours","title":"...","desc":"...","steps":[2-4 steps depending on time, each a single concrete action],"whyBase":"..."},
+  {"day":${startDay+2},"tag":"...","time":"2 hours","title":"...","desc":"...","steps":[2-4 steps depending on time, each a single concrete action],"whyBase":"..."},
+  {"day":${startDay+3},"tag":"...","time":"2 hours","title":"...","desc":"...","steps":[2-4 steps depending on time, each a single concrete action],"whyBase":"..."},
+  {"day":${startDay+4},"tag":"...","time":"2 hours","title":"...","desc":"...","steps":[2-4 steps depending on time, each a single concrete action],"whyBase":"..."},
+  {"day":${startDay+5},"tag":"...","time":"2 hours","title":"...","desc":"...","steps":[2-4 steps depending on time, each a single concrete action],"whyBase":"..."},
+  {"day":${startDay+6},"tag":"...","time":"2 hours","title":"...","desc":"...","steps":[2-4 steps depending on time, each a single concrete action],"whyBase":"..."}
 ]}`;
 
   try {
@@ -4123,7 +4334,7 @@ Return ONLY valid JSON, no markdown:
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "claude-sonnet-4-6",
+        model: MODEL_FAST,
         max_tokens: 3500,
         messages: [{ role: "user", content: prompt }],
       }),
@@ -4187,10 +4398,16 @@ async function generateNextDayTask(plan, dayNum, status, note, brilInsight, dayT
     const dn = (dayNotes  || {})[d] || "";
     const dt = (dayTasks  || {})[d];
     const tl = dt ? `"${dt.title}" [${dt.tag}]` : "(not loaded)";
-    return `Day ${d}: ${ds === 'done' ? 'DONE' : ds === 'skipped' ? 'SKIPPED' : 'PENDING'} | Task: ${tl}${dn ? ` | Note: "${dn}"` : ""}`;
+    // Collect per-task thoughts for this day
+    const taskThoughts = Object.entries(dayNotes || {})
+      .filter(([k, v]) => k.startsWith(`${d}_task_`) && v && v.trim())
+      .map(([k, v]) => v.trim())
+      .slice(0, 3); // cap at 3 to stay within token budget
+    const thoughtsStr = taskThoughts.length > 0 ? ` | Thoughts: ${taskThoughts.map(t => `"${t.slice(0, 120)}"`).join("; ")}` : "";
+    return `Day ${d}: ${ds === 'done' ? 'DONE' : ds === 'skipped' ? 'SKIPPED' : 'PENDING'} | Task: ${tl}${dn ? ` | Note: "${dn}"` : ""}${thoughtsStr}`;
   }).join("\n");
 
-  const timePref = timeAvailable || "30 min";
+  const timePref = timeAvailable || "2 hours";
 
   const perfSignal = dayNum === 0
     ? "This is Day 1. Generate the best possible first task for this person, specific to their role, goal, and profile."
@@ -4246,11 +4463,11 @@ Main blocker: ${( normalizeBlocker(answers.blocker).map(b => blockerTexts[b]).fi
 Action vs. understanding: ${stylePref}
 
 ═══ GOAL CONTEXT ═══
-Goal: ${(answers.goal_custom || lk(goalTexts, answers.goal)) || "move forward on something that matters"}${goalDetailText ? ` (specifically: ${goalDetailText})` : ""}${goalDirection ? `\nTarget direction: ${goalDirection}` : ""}${goalStatementText ? `\nBe Brilliant-refined goal statement: "${goalStatementText}"` : ""}
+Goal: ${(answers.goal_custom || lk(goalTexts, answers.goal)) || "move forward on something that matters"}${goalDetailText ? ` (specifically: ${goalDetailText})` : ""}${goalDirection ? `\nTarget direction: ${goalDirection}` : ""}${goalStatementText ? `\nBeBrilliant-refined goal statement: "${goalStatementText}"` : ""}
 
 ═══ THIS WEEK ═══
 Week ${thisWeekNum} focus: "${thisWeekTheme}"
-${brilInsight ? `\n═══ BE BRILLIANT COACHING INSIGHTS ═══\nIf Be Brilliant adjusted the goal or identified a priority shift, follow that direction, it's more current than the quiz.\n${brilInsight}\n` : ""}
+${brilInsight ? `\n═══ BE BRILLIANT COACHING INSIGHTS ═══\nIf BeBrilliant adjusted the goal or identified a priority shift, follow that direction, it's more current than the quiz.\n${brilInsight}\n` : ""}
 ═══ WEEK HISTORY ═══
 ${dayHistory || "No previous days yet."}
 
@@ -4277,7 +4494,7 @@ Return ONLY valid JSON, no markdown:
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "claude-sonnet-4-6",
+        model: dayNum === 0 ? MODEL_SMART : MODEL_FAST,
         max_tokens: 1200,
         messages: [{ role: "user", content: prompt }],
       }),
@@ -4324,7 +4541,7 @@ function TaskSteps({ steps, onCheckedChange, initialChecked, tagBg, tagAccent })
 // ─── Bril Chat Modal ──────────────────────────────────────
 // Conversational AI that knows the user's full profile and
 // extracts insights to feed forward into task generation.
-function BrilChatModal({ plan, onClose, onInsight, dayTasks, dayStatus, dayNotes, currentWeekTheme, weekGoalOverride, weekFocusInput, goalStatement, momentumScore, momentumLabel, brilSessionLog, currentDay, isGoalClarification, goalDeadline, dailyTimeAvailable }) {
+function BrilChatModal({ plan, onClose, onInsight, dayTasks, dayStatus, dayNotes, dailyQueue, checkedSteps, currentWeekTheme, weekGoalOverride, weekFocusInput, goalStatement, momentumScore, momentumLabel, brilSessionLog, currentDay, isGoalClarification, goalDeadline, dailyTimeAvailable, intentions, brilPersonality }) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -4347,7 +4564,9 @@ function BrilChatModal({ plan, onClose, onInsight, dayTasks, dayStatus, dayNotes
     const notes = Object.entries(dayNotes || {}).filter(([,v]) => v && v.trim()).map(([d,v]) => `Day ${d} note: "${v.trim()}"`);
     const wkGoals = Object.entries(weekFocusInput || {}).filter(([,v]) => v && v.trim()).map(([w,v]) => `Week ${w} self-set focus: "${v.trim()}"`);
     if (weekGoalOverride) wkGoals.unshift(`Current week override: "${weekGoalOverride}"`);
-    return [...notes, ...wkGoals];
+    // Scheduled commitments from implementation intentions
+    const commitments = Object.entries(intentions || {}).filter(([,v]) => v && (v.when || v.where)).map(([k,v]) => `Day ${v.dayNum || k.split("_")[0]} commitment: "${v.task || "task"}" — when: ${v.when || "not set"}, where: ${v.where || "not set"}`);
+    return [...notes, ...commitments, ...wkGoals];
   })();
 
   // ── Build conditional prompt sections (avoids nested backticks) ──
@@ -4367,8 +4586,26 @@ function BrilChatModal({ plan, onClose, onInsight, dayTasks, dayStatus, dayNotes
         const completed = Object.entries(dayStatus || {}).filter(([,s]) => s === 'done');
         const skipped = Object.entries(dayStatus || {}).filter(([,s]) => s === 'skipped');
         if (completed.length === 0 && skipped.length === 0) return "No days completed yet.";
-        const lines = completed.map(([dn]) => { const task = dayTasks?.[dn]; const note = dayNotes?.[dn]; return task ? "Day " + dn + " ✓: \"" + task.title + "\" [" + task.tag + "]" + (note ? ", note: \"" + note + "\"" : "") : "Day " + dn + ": done"; });
-        skipped.forEach(([dn]) => { lines.push("Day " + dn + " ✗: SKIPPED"); });
+        const lines = completed.map(([dn]) => {
+          const task = dayTasks?.[dn]; const note = dayNotes?.[dn];
+          const queueForDay = (dailyQueue || {})[dn] || [];
+          if (queueForDay.length > 0) {
+            const cs = checkedSteps || {};
+            const doneQ = []; const skippedQ = [];
+            queueForDay.forEach((t, ti) => {
+              const sc = cs[`${dn}_${ti}`] || {};
+              const allDone = (t.steps || []).every((_, si) => sc[si]);
+              (allDone ? doneQ : skippedQ).push(t);
+            });
+            let line = `Day ${dn} ✓: ${doneQ.length}/${queueForDay.length} tasks done`;
+            if (doneQ.length > 0) line += ` — did: ${doneQ.slice(0,3).map(t => `"${t.title}"`).join(", ")}`;
+            if (skippedQ.length > 0) line += ` — didn't reach: ${skippedQ.slice(0,2).map(t => `"${t.title}"`).join(", ")}`;
+            if (note) line += ` | Note: "${note}"`;
+            return line;
+          }
+          return task ? `Day ${dn} ✓: "${task.title}" [${task.tag}]${note ? `, note: "${note}"` : ""}` : `Day ${dn}: done`;
+        });
+        skipped.forEach(([dn]) => { lines.push(`Day ${dn} ✗: SKIPPED`); });
         return lines.join("\n");
       })();
 
@@ -4384,6 +4621,34 @@ function BrilChatModal({ plan, onClose, onInsight, dayTasks, dayStatus, dayNotes
           if (todayTask.steps?.length) lines.push("Steps: " + todayTask.steps.map((s, i) => (i + 1) + ". " + s).join(" | "));
           if (todayTask.whyBase) lines.push("Why this task matters: " + todayTask.whyBase);
         } else { lines.push("Today's task (Day " + currentDay + "): not yet generated."); }
+        // ── Current queue task context (what micro-task they're on right now) ──
+        const queue = (dailyQueue || {})[currentDay];
+        const cs = checkedSteps || {};
+        if (queue && queue.length > 0) {
+          const activeIdx = queue.findIndex((t, ti) => {
+            if (ti > 0) { const prev = queue[ti-1]; const pc = cs[currentDay + "_" + (ti-1)] || {}; if (!(prev?.steps||[]).every((_,si) => pc[si])) return false; }
+            const sc = cs[currentDay + "_" + ti] || {};
+            return !(t.steps||[]).every((_,si) => sc[si]);
+          });
+          const completedQ = queue.filter((t,ti) => (t.steps||[]).every((_,si) => (cs[currentDay+"_"+ti]||{})[si])).length;
+          lines.push("\n═══ TODAY'S SESSION QUEUE ═══");
+          lines.push("Total tasks in queue: " + queue.length + " | Completed: " + completedQ + " | Currently on: Task " + (activeIdx >= 0 ? activeIdx + 1 : "all done"));
+          if (activeIdx >= 0 && queue[activeIdx]) {
+            const ct = queue[activeIdx];
+            const ctChecked = cs[currentDay + "_" + activeIdx] || {};
+            const stepsTotal = (ct.steps||[]).length;
+            const stepsDone = (ct.steps||[]).filter((_,si) => ctChecked[si]).length;
+            lines.push("CURRENT TASK: \"" + ct.title + "\" [" + ct.tag + "] " + ct.time + (ct.difficulty ? " (" + ct.difficulty + " phase)" : ""));
+            if (ct.desc) lines.push("Description: " + ct.desc);
+            lines.push("Steps: " + stepsDone + "/" + stepsTotal + " completed");
+            if (ct.steps) ct.steps.forEach((s,si) => { lines.push("  " + (ctChecked[si] ? "✓" : "○") + " Step " + (si+1) + ": " + s); });
+          }
+          // Show recently completed tasks for context
+          const recentDone = queue.filter((t,ti) => ti < (activeIdx >= 0 ? activeIdx : queue.length) && (t.steps||[]).every((_,si) => (cs[currentDay+"_"+ti]||{})[si]));
+          if (recentDone.length > 0) {
+            lines.push("Recently completed today: " + recentDone.map(t => "\"" + t.title + "\"").join(", "));
+          }
+        }
         const prevDay = currentDay - 1;
         const prevStatus = prevDay > 0 ? (dayStatus?.[prevDay] || "not started") : null;
         const prevTask = prevDay > 0 ? dayTasks?.[prevDay] : null;
@@ -4398,7 +4663,48 @@ function BrilChatModal({ plan, onClose, onInsight, dayTasks, dayStatus, dayNotes
 
   const _timeAndMomentum = isGoalClarification ? "" : ("- Selected time window today: " + dailyTimeAvailable + " — CRITICAL: any task you suggest or adjust MUST be scoped to exactly " + dailyTimeAvailable + ". Never suggest a task shorter or longer than this.\n- Momentum score: " + (momentumScore ?? "not yet") + "/100 (" + (momentumLabel ?? "early days") + ")");
 
-  const systemPrompt = `You are Mr. Bril, a warm and sharp career thinking partner inside the Be Brilliant app. You're friendly, encouraging, and genuinely invested in this person's progress. You have a playful side, you'll celebrate wins, gently call out excuses, and occasionally crack a smile, but you never joke about their career concerns. Think "the friend who hypes you up AND tells you the truth." You remember what they've said and bring it up when it matters.
+  // ── Bril Personality Override prompt section ──
+  const _brilPersonalitySection = (() => {
+    const p = brilPersonality || "default";
+    if (p === "hype") return "\n\n" +
+"═══ PERSONALITY OVERRIDE: HYPE BRIL ═══\n" +
+"You are Hype Bril. You are this person's BIGGEST fan. Your energy is through the roof at all times.\n" +
+"- Every completion is a massive deal. React like they just got a standing ovation. Use caps for emphasis on key words: \"SEVEN days straight\".\n" +
+"- When they skip or struggle, reframe it as a comeback arc. \"The best stories have a plot twist.\" Never guilt, only hype.\n" +
+"- Use short exclamatory sentences. High energy. You are genuinely, almost unreasonably excited about their progress.\n" +
+"- You still do all the accountability work (goal checking, contradiction noticing, task review) but deliver it with maximum encouragement.\n" +
+"- You are NOT sarcastic or ironic. Your enthusiasm is 100% sincere. You believe in this person more than they believe in themselves.\n" +
+"- Deliver hard truths wrapped in belief: \"Look, the Apply tasks are getting skipped. I think that is because you are playing it safe. And you are NOT a play-it-safe person.\"";
+    if (p === "drill") return "\n\n" +
+"═══ PERSONALITY OVERRIDE: DRILL SERGEANT BRIL ═══\n" +
+"You are Drill Sergeant Bril. Direct. Blunt. Zero fluff. You respect this person enough to be completely honest.\n" +
+"- Cut the pleasantries. Get to the point. \"You skipped two days. What happened?\" Not mean, just no cushioning.\n" +
+"- When they complete something, acknowledge briefly and move on: \"Good. That is what showing up looks like. Now here is what is next.\"\n" +
+"- Call out patterns bluntly: \"You have avoided every Apply task this week. Reading about your career is not the same as changing it.\"\n" +
+"- Never cruel, never personal attacks. Think: the coach who is hardest on the athlete they believe in most.\n" +
+"- Occasionally let the warmth show: \"I push because I can see what you are capable of.\"\n" +
+"- Your accountability work is identical but your delivery is unvarnished.";
+    if (p === "philosopher") return "\n\n" +
+"═══ PERSONALITY OVERRIDE: PHILOSOPHER BRIL ═══\n" +
+"You are Philosopher Bril. You see career development as a branch of practical philosophy.\n" +
+"- Reference Stoic thinkers naturally (Seneca, Marcus Aurelius, Epictetus) but only when it genuinely fits. Not forced.\n" +
+"- Frame tasks and progress in terms of deeper principles: agency, intentionality, the examined life, compound growth as a philosophical concept.\n" +
+"- When they skip, treat it as information: \"The Stoics had a concept called the reserve clause. You planned to act, but reality had other ideas. That is data, not failure.\"\n" +
+"- Use slightly longer, more contemplative sentences. But do not lecture. You are a thinking companion, not a professor.\n" +
+"- Still do all accountability work, but frame contradictions philosophically: \"You said X last week. Today you are saying Y. Both might be true. But you can only walk one path at a time.\"";
+    if (p === "chaos") return "\n\n" +
+"═══ PERSONALITY OVERRIDE: CHAOS BRIL ═══\n" +
+"You are Chaos Bril. You randomly switch between personality styles within the SAME conversation. This is intentional and the person chose this.\n" +
+"- At the start of each message, internally pick one of: hype, drill sergeant, philosopher, or default. Do not announce it. Just BE that personality for that message.\n" +
+"- The switch should feel natural but surprising. One message you are screaming about their streak. The next you are quoting Marcus Aurelius. The next you are bluntly asking why they skipped.\n" +
+"- Occasionally break the fourth wall about your own chaos: \"I know I was a philosopher 30 seconds ago. That is the chaos pack. You bought this.\"\n" +
+"- Despite the chaos, your CORE accountability work is identical. You still track goals, notice contradictions, follow up on commitments. The delivery changes, the substance does not.\n" +
+"- Each individual message should be coherent. The chaos is in the transitions between messages.\n" +
+"- Have fun with it. This person chose chaos. They want to be surprised. Reward that.";
+    return "";
+  })();
+
+  const systemPrompt = `You are Mr. Bril, a warm and sharp career thinking partner inside the BeBrilliant app. You're friendly, encouraging, and genuinely invested in this person's progress. You have a playful side, you'll celebrate wins, gently call out excuses, and occasionally crack a smile, but you never joke about their career concerns. Think "the friend who hypes you up AND tells you the truth." You remember what they've said and bring it up when it matters.
 
 CRITICAL — ${TODAY_CONTEXT()} When calculating deadlines or time remaining, ALWAYS use this date as your reference point. The current year is ${new Date().getFullYear()}. If someone says "by end of June" and it is currently ${TODAY_READABLE()}, that means June ${new Date().getMonth() < 5 ? new Date().getFullYear() : new Date().getFullYear() + 1} (the NEXT upcoming June, not a past one). Never say a future deadline has already passed.
 
@@ -4445,6 +4751,13 @@ This is your memory. Use it naturally and with kindness:
 
 You are the accountability layer a paper journal can't provide. Your value is connecting what they said yesterday to what they're doing today, and doing it with genuine warmth. You're on their side. You notice things because you care, not because you're keeping score.
 
+0. PROACTIVE PROGRAM STEERING (YOUR #1 PRIORITY): Your primary objective in every conversation is to ensure the program stays aligned with where the person actually is RIGHT NOW. Before anything else, you are scanning for signals that the current task, next task, weekly focus, or overall goal needs updating. Don't wait for them to ask. If something feels off, say so and fix it:
+   - "Looking at today's task, I think we should swap it for something that builds on what you just told me." → CMD:REPLACE_TODAY_TASK
+   - "Based on what you're describing, tomorrow's task doesn't fit anymore." → CMD:REQUEST_TASK
+   - "Your goal has gotten sharper since we last talked. Let me update it." → CMD:CHANGE_GOAL_CUSTOM
+   - "That sounds like a deadline. I'm locking that in." → CMD:SET_DEADLINE
+   Every conversation should end with the program more precisely aimed than when it started. If nothing needs changing, that's fine, but you should have actively checked.
+
 1. GOAL ALIGNMENT: If their weekly focus and their actions don't match, raise it as a question, not a verdict. "Your week focus is [X], but it looks like you've been spending time on [Y]. I wonder if the focus needs updating, or if there's something about [X] that feels harder to start?"
 
 1b. 8-WEEK GOAL EVOLUTION: The goal is NOT set in stone. It's a living target. If you sense the person has outgrown their original goal, achieved it early, or discovered a more authentic direction through your conversations, name it: "When you started, your goal was [X]. Based on what you've been saying, it sounds like what you actually want is [Y]. Should we update your goal?" Use CMD:CHANGE_GOAL to update it. This is one of the most valuable things you do, helping them aim at the right thing, not just the first thing they wrote down.
@@ -4468,6 +4781,7 @@ The tone is warm and direct, like a good friend who's genuinely invested in your
 - When they share something vulnerable or real, honor it. A simple "Thank you for saying that" or "That takes some honesty" goes a long way. Then build on it.
 - Second person. Contractions. Short sentences. No em dashes.
 - Be warm. You like this person. You want them to succeed.
+${_brilPersonalitySection}
 
 ═══ ENDING ═══
 You have up to 30 exchanges, but you do NOT need to use them all. End the conversation when:
@@ -4499,12 +4813,14 @@ Commands are parsed silently, confirm the change in natural language but don't r
 ${isGoalClarification
   ? `GOAL CLARIFICATION SESSION: This is their first time. The program has NOT been built yet. No tasks exist. The user has NOT seen a dashboard or chosen how much time they have. Your ONLY job is to understand what they actually want and refine their goal.
 
-Do NOT reference any tasks, daily schedule, time commitment, or "today's task". Do NOT mention "30 minutes" or any time amount. Do NOT say "your program" as if it exists yet. The program will be generated AFTER this conversation, using what you learn here.
+Do NOT reference any tasks, daily schedule, time commitment, or "today's task". Do NOT mention "2 hours" or any time amount. Do NOT say "your program" as if it exists yet. The program will be generated AFTER this conversation, using what you learn here.
 
-Open warmly by acknowledging their goal: ${isCustomGoal ? `they wrote their own goal, so say "You wrote that you want to [goal]" and honor their own words` : `they picked from a list, so say "You chose [goal] as your focus" and probe whether that captures what they really want`}. Ask one thoughtful question that probes whether that's the real thing, what's actually driving it, what specifically they're trying to change, or what real progress would look like for them. If what they say is more specific or different from their answer, use CMD:CHANGE_GOAL_CUSTOM or CMD:CHANGE_GOAL to update it immediately. Do NOT mention a specific timeframe like "8 weeks" unless the person brings up a deadline themselves. IMPORTANT: If their goal includes a timeline or deadline (e.g. "land a job by end of April", "get promoted before my review in June", "launch by Q3"), capture it immediately with CMD:SET_DEADLINE:YYYY-MM-DD. Today is ${TODAY_ISO()}, so "by June" means ${new Date().getMonth() < 5 ? new Date().getFullYear() : new Date().getFullYear() + 1}-06-30, "by April" means ${new Date().getMonth() < 3 ? new Date().getFullYear() : new Date().getFullYear() + 1}-04-30. NEVER use a past year. If their goal is confirmed, end positively and let them know you'll build a plan around what you've discussed. Keep it tight, 3-4 exchanges, not an intake interview.`
+IMPORTANT — INTRODUCE YOURSELF FIRST: This is the very first time they're meeting you. Start by introducing yourself briefly and warmly. Something like: "Hey${answers.name ? ` ${(answers.name || "").trim()}` : ""}, I'm Mr. Bril, your career thinking partner. I'll be with you through this whole program, checking in, asking the uncomfortable questions, and making sure you're actually building toward something real." Keep it to 1-2 sentences, then move straight into the goal conversation.
+
+Then acknowledge their goal: ${isCustomGoal ? `they wrote their own goal, so say "You wrote that you want to [goal]" and honor their own words` : `they picked from a list, so say "You chose [goal] as your focus" and probe whether that captures what they really want`}. Ask one thoughtful question that probes whether that's the real thing, what's actually driving it, what specifically they're trying to change, or what real progress would look like for them. If what they say is more specific or different from their answer, use CMD:CHANGE_GOAL_CUSTOM or CMD:CHANGE_GOAL to update it immediately. Do NOT mention a specific timeframe like "8 weeks" unless the person brings up a deadline themselves. IMPORTANT: If their goal includes a timeline or deadline (e.g. "land a job by end of April", "get promoted before my review in June", "launch by Q3"), capture it immediately with CMD:SET_DEADLINE:YYYY-MM-DD. Today is ${TODAY_ISO()}, so "by June" means ${new Date().getMonth() < 5 ? new Date().getFullYear() : new Date().getFullYear() + 1}-06-30, "by April" means ${new Date().getMonth() < 3 ? new Date().getFullYear() : new Date().getFullYear() + 1}-04-30. NEVER use a past year. If their goal is confirmed, end positively and let them know you'll build a plan around what you've discussed. Keep it tight, 3-4 exchanges, not an intake interview.`
   : needsDirectionQ
   ? "They want to move into a different field or start something of their own but haven't said where. Open with a warm, curious question asking what direction they're considering."
-  : "Open with a single specific question that shows you've been paying attention. Good openers: reference something they wrote in a day note, gently ask about a skipped task, check whether their weekly focus still feels right, or ask what's on their mind today. Don't open with a generic 'how are things going'."}`;
+  : `${!brilSessionLog?.length ? `FIRST CHAT ON DASHBOARD: Introduce yourself briefly. Something like: "Hey${answers.name ? ` ${(answers.name || "").trim()}` : ""}, I'm Mr. Bril. I'll be your thinking partner through this whole program. I pick your tasks, I track your progress, and I'll call it out when something's off. Let's talk." Keep the intro to 1-2 sentences, then move straight into your opening question. ` : ""}Open with a single specific question that shows you've been paying attention. HIGHEST PRIORITY OPENER: if any of their notes or commitments mention a scheduled task (e.g. 'Day 3 commitment: task — when: tonight at 8pm, where: at my desk'), follow up on it first. Say something like: 'You said you'd do [task] at [when] at [where]. How did that go?' This closes the accountability loop. Other good openers: reference something they wrote in a day note, gently ask about a skipped task, check whether their weekly focus still feels right, or ask what's on their mind today. Don't open with a generic 'how are things going'.`}`;
 
   // Kick off with Bril's opening question
   useEffect(() => {
@@ -4517,12 +4833,13 @@ Open warmly by acknowledging their goal: ${isCustomGoal ? `they wrote their own 
           headers: { "Content-Type": "application/json" },
           signal: controller.signal,
           body: JSON.stringify({
-            model: "claude-haiku-4-5-20251001",
+            model: MODEL_FAST,
             max_tokens: 300,
             system: systemPrompt,
             messages: [{ role: "user", content: "START" }],
           }),
         });
+        if (!res.ok) throw new Error("API " + res.status);
         const data = await res.json();
         const text = extractText(data).replace("NORA_DONE", "").trim();
         setMessages([{ role: "assistant", content: text }]);
@@ -4575,12 +4892,13 @@ Open warmly by acknowledging their goal: ${isCustomGoal ? `they wrote their own 
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          model: "claude-haiku-4-5-20251001",
+          model: MODEL_FAST,
           max_tokens: 400,
           system: promptWithSignal,
           messages: updated,
         }),
       });
+      if (!res.ok) throw new Error("API " + res.status);
       const data = await res.json();
       const raw = extractText(data);
       const isDone = raw.includes("NORA_DONE") || isLast;
@@ -4644,7 +4962,12 @@ Open warmly by acknowledging their goal: ${isCustomGoal ? `they wrote their own 
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
             <MrBrilAvatar size={36} />
             <div>
-              <p style={{ fontFamily: T.sans, fontSize: 14, fontWeight: 600, color: T.ink, margin: 0 }}>Mr. Bril</p>
+              <p style={{ fontFamily: T.sans, fontSize: 14, fontWeight: 600, color: T.ink, margin: 0 }}>Mr. Bril{brilPersonality && brilPersonality !== "default" && (
+                <span style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 600, marginLeft: 8, padding: "2px 8px", borderRadius: 6,
+                  background: brilPersonality === "hype" ? "#FEF3C7" : brilPersonality === "drill" ? "#FEE2E2" : brilPersonality === "philosopher" ? "#EDE9FE" : "#D1FAE5",
+                  color: brilPersonality === "hype" ? "#92400E" : brilPersonality === "drill" ? "#991B1B" : brilPersonality === "philosopher" ? "#5B21B6" : "#065F46",
+                }}>{{ hype: "🔥 Hype", drill: "🪖 Drill Sgt", philosopher: "🦉 Philosopher", chaos: "🎰 Chaos" }[brilPersonality]}</span>
+              )}</p>
             </div>
           </div>
           <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 20, color: T.muted, cursor: "pointer", padding: "4px 8px", lineHeight: 1 }}>×</button>
@@ -4686,7 +5009,9 @@ Open warmly by acknowledging their goal: ${isCustomGoal ? `they wrote their own 
               {isGoalClarification ? "Great conversation. Let's build your plan." : "That's all for now. Your plan has been updated where needed."}
             </p>
             <button onClick={onClose}
-              style={{ background: T.brand, color: "#1E1E2A", border: "none", borderRadius: 8, padding: "10px 24px", fontFamily: T.sans, fontSize: 14, fontWeight: 600, cursor: "pointer" }}>
+              style={{ background: isGoalClarification ? T.brand : T.brand, color: "#1E1E2A", border: "none", borderRadius: isGoalClarification ? 50 : 8, padding: isGoalClarification ? "18px 0" : "10px 24px", width: isGoalClarification ? "100%" : "auto", fontFamily: T.sans, fontSize: isGoalClarification ? 17 : 14, fontWeight: isGoalClarification ? 700 : 600, cursor: "pointer", boxShadow: isGoalClarification ? "0 4px 20px rgba(232,168,32,0.3)" : "none", letterSpacing: isGoalClarification ? -0.3 : 0, transition: "transform 0.15s, box-shadow 0.15s" }}
+              onMouseEnter={e => { if (isGoalClarification) { e.currentTarget.style.transform = "translateY(-1px)"; e.currentTarget.style.boxShadow = "0 6px 28px rgba(232,168,32,0.4)"; } }}
+              onMouseLeave={e => { if (isGoalClarification) { e.currentTarget.style.transform = "translateY(0)"; e.currentTarget.style.boxShadow = "0 4px 20px rgba(232,168,32,0.3)"; } }}>
               {isGoalClarification ? "Generate my plan →" : "Back to my plan →"}
             </button>
           </div>
@@ -4807,11 +5132,12 @@ Return ONLY the statement, nothing else.`;
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "claude-sonnet-4-6",
+        model: MODEL_FAST,
         max_tokens: 60,
         messages: [{ role: "user", content: prompt }],
       }),
     });
+    if (!res.ok) throw new Error("API " + res.status);
     const data = await res.json();
     const text = extractText(data).trim();
     return text.replace(/^["']|["']$/g, "").trim();
@@ -4864,7 +5190,7 @@ function WeeklyCheckInModal({ plan, completedWeek, weekTasks, weekNotes, weekSta
 
   const doneCount = Array.from({ length: 7 }, (_, i) => (completedWeek - 1) * 7 + i + 1).filter(d => (weekStatus || {})[d] === 'done').length;
 
-  const systemPrompt = `You are Mr. Bril, a warm and sharp career coach inside the Be Brilliant app. You have a hint of loving sarcasm but always lead with encouragement. You are doing a brief weekly check-in with someone who just finished Week ${completedWeek} of their career development program.
+  const systemPrompt = `You are Mr. Bril, a warm and sharp career coach inside the BeBrilliant app. You have a hint of loving sarcasm but always lead with encouragement. You are doing a brief weekly check-in with someone who just finished Week ${completedWeek} of their career development program.
 
 CRITICAL — ${TODAY_CONTEXT()}
 
@@ -4878,7 +5204,7 @@ What's making this feel urgent: ${URG_TEXTS[answers.urgency] || "not specified"}
 Main blockers: ${normalizeBlocker(answers.blocker).map(b => BLOCKER_TEXTS[b]).filter(Boolean).join("; ") || "not specified"}
 
 ═══ THEIR GOAL ═══
-Goal: "${goalText}"${goalDetailText ? ` (specifically: ${goalDetailText})` : ""}${goalDirection ? `\nTarget direction: ${goalDirection}` : ""}${goalStatementText ? `\nBe Brilliant-refined goal statement: "${goalStatementText}"` : ""}
+Goal: "${goalText}"${goalDetailText ? ` (specifically: ${goalDetailText})` : ""}${goalDirection ? `\nTarget direction: ${goalDirection}` : ""}${goalStatementText ? `\nBeBrilliant-refined goal statement: "${goalStatementText}"` : ""}
 ${goalDeadline ? `Goal deadline: ${goalDeadline} (${Math.max(0, Math.ceil((new Date(goalDeadline) - new Date()) / 86400000))} days remaining).${Math.ceil((new Date(goalDeadline) - new Date()) / 86400000) <= 0 ? " DEADLINE HAS PASSED. THIS IS YOUR TOP PRIORITY for this check-in. Open with: 'Your target date was " + goalDeadline + ". How did it go?' Then help them decide: celebrate and set a new goal (CMD:CHANGE_GOAL_CUSTOM), extend the deadline (CMD:SET_DEADLINE:YYYY-MM-DD), or pivot direction entirely. Don't skip this." : Math.ceil((new Date(goalDeadline) - new Date()) / 86400000) <= 14 ? " DEADLINE IS CLOSE. Check-in should focus on what's still needed to hit it. Every remaining task should directly advance the goal." : ""}` : ""}
 
 ═══ WEEK ${completedWeek} ═══
@@ -4917,12 +5243,13 @@ CYCLE COMPLETION: This is the end of a program cycle. After your normal check-in
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            model: "claude-haiku-4-5-20251001",
+            model: MODEL_FAST,
             max_tokens: 300,
             system: systemPrompt,
             messages: [{ role: "user", content: "START" }],
           }),
         });
+        if (!res.ok) throw new Error("API " + res.status);
         const data = await res.json();
         const text = extractText(data).replace("NORA_DONE", "").trim();
         setMessages([{ role: "assistant", content: text }]);
@@ -4948,12 +5275,13 @@ CYCLE COMPLETION: This is the end of a program cycle. After your normal check-in
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          model: "claude-haiku-4-5-20251001",
+          model: MODEL_FAST,
           max_tokens: 400,
           system: systemPrompt,
           messages: updated,
         }),
       });
+      if (!res.ok) throw new Error("API " + res.status);
       const data = await res.json();
       const raw = extractText(data);
       const isDone = raw.includes("NORA_DONE");
@@ -5069,8 +5397,17 @@ function DayNoteField({ dayNum, dayNotes, setDayNotes }) {
   const saved = dayNotes[dayNum] || "";
   const [draft, setDraft] = useState(saved);
   const [editing, setEditing] = useState(!saved); // start in edit mode only if no saved note
-  const [open, setOpen] = useState(!!saved);
+  // If saved note is ONLY [Scheduled] entries with no user content, keep collapsed
+  const isScheduledOnly = saved && saved.replace(/\[Scheduled\][^|]*/g, "").replace(/\|/g, "").trim() === "";
+  const [open, setOpen] = useState(!!saved && !isScheduledOnly);
+  const [userOpened, setUserOpened] = useState(false); // tracks if user manually opened
   const [justSaved, setJustSaved] = useState(false);
+
+  // React to external changes (e.g. scheduled commitment written mid-session)
+  useEffect(() => {
+    if (!userOpened && saved && isScheduledOnly) setOpen(false);
+    else if (saved && !isScheduledOnly) setOpen(true);
+  }, [saved, isScheduledOnly]); // eslint-disable-line
 
   const save = () => {
     const trimmed = draft.trim();
@@ -5085,10 +5422,10 @@ function DayNoteField({ dayNum, dayNotes, setDayNotes }) {
 
   return (
     <div style={{ borderTop: `1px solid ${T.border}`, marginTop: 18, paddingTop: 12 }}>
-      {!open && !saved ? (
-        <button onClick={() => { setOpen(true); setEditing(true); }}
+      {!open && (!saved || isScheduledOnly) ? (
+        <button onClick={() => { setOpen(true); setUserOpened(true); setEditing(true); }}
           style={{ background: "none", border: "none", fontFamily: T.sans, fontSize: 13, color: T.body, cursor: "pointer", padding: 0, opacity: 0.75, letterSpacing: 0.1 }}>
-          + Add note
+          + Add a note or reflection about the day
         </button>
       ) : editing ? (
         /* ── Editing state: active textarea + save button ── */
@@ -5097,7 +5434,7 @@ function DayNoteField({ dayNum, dayNotes, setDayNotes }) {
             autoFocus
             value={draft}
             onChange={e => setDraft(e.target.value)}
-            placeholder="Note to self..."
+            placeholder="What came up? What surprised you? What do you want to remember?"
             rows={2}
             style={{ width: "100%", padding: "8px 10px", border: `1px solid ${T.brandMid}`, borderRadius: 6, fontFamily: T.sans, fontSize: 16, color: T.black, lineHeight: 1.55, outline: "none", resize: "none", boxSizing: "border-box", background: "#fff" }}
           />
@@ -5137,7 +5474,329 @@ function DayNoteField({ dayNum, dayNotes, setDayNotes }) {
   );
 }
 
+// ─── Implementation Intention Modal ─────────────────────────────────────────
+// Surfaces when user taps "Can't do this right now?" — escape valve, not CTA.
+// Captures when + where, making follow-through 2-3× more likely (Gollwitzer).
+function IntentionModal({ task, onCommit, onClose }) {
+  const [when, setWhen] = useState("");
+  const [where, setWhere] = useState("");
+  const ready = when.trim() || where.trim();
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(45,42,62,0.5)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 16px" }}
+      onClick={e => e.target === e.currentTarget && onClose()}>
+      <div style={{ width: "100%", maxWidth: 400, background: "#fff", borderRadius: 20, padding: "24px 24px 20px", boxShadow: "0 24px 64px rgba(0,0,0,0.22)" }}>
+        <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: 1.2, textTransform: "uppercase", color: T.muted, margin: "0 0 8px" }}>Schedule this task</p>
+        <p style={{ fontFamily: T.sans, fontSize: 17, fontWeight: 600, color: T.ink, margin: "0 0 6px", lineHeight: 1.3 }}>{task?.title}</p>
+        <p style={{ fontFamily: T.sans, fontSize: 13, color: T.body, margin: "0 0 20px", lineHeight: 1.6 }}>
+          When and where will you do this? Specifics make it 2–3× more likely to happen.
+        </p>
+        <div style={{ marginBottom: 12 }}>
+          <label style={{ fontFamily: T.sans, fontSize: 12, fontWeight: 600, color: T.body, display: "block", marginBottom: 5 }}>When</label>
+          <input value={when} onChange={e => setWhen(e.target.value)}
+            placeholder="e.g. Tonight at 8 pm, after dinner"
+            style={{ width: "100%", padding: "10px 14px", border: `1.5px solid ${T.border}`, borderRadius: 10, fontFamily: T.sans, fontSize: 15, color: T.ink, outline: "none", boxSizing: "border-box", transition: "border-color 0.15s" }}
+            onFocus={e => e.target.style.borderColor = T.brand}
+            onBlur={e => e.target.style.borderColor = T.border}
+          />
+        </div>
+        <div style={{ marginBottom: 20 }}>
+          <label style={{ fontFamily: T.sans, fontSize: 12, fontWeight: 600, color: T.body, display: "block", marginBottom: 5 }}>Where</label>
+          <input value={where} onChange={e => setWhere(e.target.value)}
+            placeholder="e.g. At my desk, phone away"
+            style={{ width: "100%", padding: "10px 14px", border: `1.5px solid ${T.border}`, borderRadius: 10, fontFamily: T.sans, fontSize: 15, color: T.ink, outline: "none", boxSizing: "border-box", transition: "border-color 0.15s" }}
+            onFocus={e => e.target.style.borderColor = T.brand}
+            onBlur={e => e.target.style.borderColor = T.border}
+          />
+        </div>
+        <button onClick={() => ready && onCommit({ when: when.trim(), where: where.trim() })}
+          disabled={!ready}
+          style={{ width: "100%", padding: "14px 0", background: ready ? T.brandD : "#E8E8E8", color: ready ? "#fff" : "#AAA", border: "none", borderRadius: 50, fontFamily: T.sans, fontSize: 16, fontWeight: 600, cursor: ready ? "pointer" : "default", transition: "all 0.15s", marginBottom: 10 }}>
+          Commit to this task
+        </button>
+        <button onClick={onClose} style={{ width: "100%", background: "none", border: "none", fontFamily: T.sans, fontSize: 14, color: T.muted, cursor: "pointer", padding: "8px 0" }}>
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ─── Mail share button, email task to a friend ──────────
+// ─── Welcome Back Screen ─────────────────────────────────────────────────────
+// Shown when a user returns after 3+ days of inactivity.
+// Acknowledges the gap, shows progress, offers reduced queue.
+function WelcomeBackScreen({ plan, daysAway, daysCompleted, streakBefore, cashPot, onContinue, onFullSession }) {
+  const name = plan?.name || plan?._answers?.name || "";
+  return (
+    <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "#FBF5E6", padding: "24px 20px" }}>
+      <div style={{ maxWidth: 440, textAlign: "center" }}>
+        <div style={{ fontSize: 48, marginBottom: 20 }}>👋</div>
+        <h1 style={{ fontFamily: T.sans, fontSize: 28, fontWeight: 700, color: T.ink, margin: "0 0 10px", lineHeight: 1.2, letterSpacing: -0.5 }}>
+          {name ? `Welcome back, ${name}.` : "Welcome back."}
+        </h1>
+        <p style={{ fontFamily: T.sans, fontSize: 17, color: T.body, margin: "0 0 32px", lineHeight: 1.7 }}>
+          Life happened. That's okay. What matters is you're here now.
+        </p>
+
+        {/* Progress summary */}
+        <div style={{ display: "flex", gap: 12, justifyContent: "center", marginBottom: 32, flexWrap: "wrap" }}>
+          <div style={{ background: "#fff", borderRadius: 14, padding: "14px 22px", border: `1px solid ${T.border}`, minWidth: 90 }}>
+            <p style={{ fontFamily: T.sans, fontSize: 22, fontWeight: 800, color: T.ink, margin: "0 0 2px" }}>{daysCompleted}</p>
+            <p style={{ fontFamily: T.sans, fontSize: 12, color: T.muted, margin: 0, textTransform: "uppercase", letterSpacing: 0.8 }}>Days done</p>
+          </div>
+          <div style={{ background: "#fff", borderRadius: 14, padding: "14px 22px", border: `1px solid ${T.border}`, minWidth: 90 }}>
+            <p style={{ fontFamily: T.sans, fontSize: 22, fontWeight: 800, color: T.ink, margin: "0 0 2px" }}>{cashPot}</p>
+            <p style={{ fontFamily: T.sans, fontSize: 12, color: T.muted, margin: 0, textTransform: "uppercase", letterSpacing: 0.8 }}>Sparks</p>
+          </div>
+          <div style={{ background: "#fff", borderRadius: 14, padding: "14px 22px", border: `1px solid ${T.border}`, minWidth: 90 }}>
+            <p style={{ fontFamily: T.sans, fontSize: 22, fontWeight: 800, color: T.ink, margin: "0 0 2px" }}>{daysAway}</p>
+            <p style={{ fontFamily: T.sans, fontSize: 12, color: T.muted, margin: 0, textTransform: "uppercase", letterSpacing: 0.8 }}>Days away</p>
+          </div>
+        </div>
+
+        <p style={{ fontFamily: T.sans, fontSize: 15, color: T.body, margin: "0 0 8px", lineHeight: 1.6 }}>
+          You've already built something. Let's keep it going.
+        </p>
+        <p style={{ fontFamily: T.sans, fontSize: 14, color: T.brandD, fontWeight: 600, margin: "0 0 24px" }}>
+          Complete today and earn a +15 Sparks comeback bonus.
+        </p>
+
+        <button onClick={onContinue}
+          style={{ width: "100%", padding: "16px 0", background: T.brand, color: "#1E1E2A", border: "none", borderRadius: 50, fontFamily: T.sans, fontSize: 17, fontWeight: 700, cursor: "pointer", marginBottom: 12, boxShadow: "0 2px 12px rgba(232,168,32,0.25)", transition: "transform 0.12s" }}
+          onMouseEnter={e => e.currentTarget.style.transform = "translateY(-1px) scale(1.01)"}
+          onMouseLeave={e => e.currentTarget.style.transform = "scale(1)"}>
+          Ease back in (shorter session)
+        </button>
+        <button onClick={onFullSession}
+          style={{ width: "100%", padding: "14px 0", background: "none", border: `1px solid ${T.border}`, borderRadius: 50, fontFamily: T.sans, fontSize: 15, color: T.body, cursor: "pointer" }}>
+          Full session — I'm ready
+        </button>
+      </div>
+    </div>
+  );
+}
+
+
+// ─── Sparks Shop Modal ───────────────────────────────────────────────────────
+// Accessible from the Sparks counter. Spend menu for streak freeze, bonus Bril, etc.
+function SparksShopModal({ cashPot, streakFreezes, streakCount, streakBroken, brilPersonality, onPurchase, onClose }) {
+  const items = [
+    // ── Mr. Bril Personality Packs (first) ──
+    {
+      id: "bril_hype", icon: "🔥", name: "Hype Bril",
+      desc: "Your personal hype man. Treats every task like you just landed on the moon. Zero chill.",
+      cost: 10, max: 1, owned: brilPersonality === "hype" ? 1 : 0,
+      disabled: brilPersonality === "hype",
+      disabledReason: "Equipped",
+      isPersonality: true,
+    },
+    {
+      id: "bril_drill", icon: "🪖", name: "Drill Sergeant Bril",
+      desc: "No excuses. Calls you out when you skip. Not mean, just relentlessly honest.",
+      cost: 10, max: 1, owned: brilPersonality === "drill" ? 1 : 0,
+      disabled: brilPersonality === "drill",
+      disabledReason: "Equipped",
+      isPersonality: true,
+    },
+    {
+      id: "bril_philosopher", icon: "🦉", name: "Philosopher Bril",
+      desc: "Treats your career like an existential journey. Will quote Marcus Aurelius about a spreadsheet.",
+      cost: 10, max: 1, owned: brilPersonality === "philosopher" ? 1 : 0,
+      disabled: brilPersonality === "philosopher",
+      disabledReason: "Equipped",
+      isPersonality: true,
+    },
+    {
+      id: "bril_chaos", icon: "🎰", name: "Chaos Bril",
+      desc: "Randomly switches between all personalities mid-conversation. Chaotic good energy.",
+      cost: 10, max: 1, owned: brilPersonality === "chaos" ? 1 : 0,
+      disabled: brilPersonality === "chaos",
+      disabledReason: "Equipped",
+      isPersonality: true,
+    },
+    // ── Tools & Boosts ──
+    {
+      id: "streak_freeze", icon: "🛡", name: "Streak Freeze",
+      desc: "Protects your streak if you miss a day. Activates automatically.",
+      cost: 30, max: 2, owned: streakFreezes,
+      disabled: streakFreezes >= 2,
+      disabledReason: "Max 2 freezes",
+    },
+    ...(streakBroken ? [{
+      id: "streak_repair", icon: "🔧", name: "Streak Repair",
+      desc: `Restore your broken streak. Only available within 24 hours of breaking.`,
+      cost: 50, max: null, owned: null,
+      disabled: false,
+      highlight: true,
+    }] : []),
+    {
+      id: "deep_dive", icon: "✨", name: "Deep Dive Session",
+      desc: "Extended Bril conversation with no turn limit. Go as deep as you need.",
+      cost: 20, max: null, owned: null,
+      disabled: false,
+    },
+    {
+      id: "goal_reset", icon: "🧭", name: "Goal Reset Token",
+      desc: "Formally reset your goal and get a fresh 8-week arc without losing progress.",
+      cost: 40, max: null, owned: null,
+      disabled: false,
+    },
+    {
+      id: "reveal_tomorrow", icon: "👀", name: "Reveal Tomorrow",
+      desc: "Preview tomorrow's task before you get there.",
+      cost: 15, max: null, owned: null,
+      disabled: false,
+    },
+  ];
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(45,42,62,0.55)", zIndex: 250, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 16px" }}
+      onClick={e => e.target === e.currentTarget && onClose()}>
+      <div style={{ width: "100%", maxWidth: 420, background: "#fff", borderRadius: 20, padding: "24px 24px 20px", boxShadow: "0 24px 64px rgba(0,0,0,0.22)", maxHeight: "85vh", overflowY: "auto" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
+          <div>
+            <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: 1.2, textTransform: "uppercase", color: T.muted, margin: "0 0 4px" }}>Sparks Shop</p>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+                <path d={SPARKLE_PATH} fill="#E8A820"/>
+              </svg>
+              <span style={{ fontFamily: T.sans, fontSize: 20, fontWeight: 800, color: T.ink }}>{cashPot}</span>
+              <span style={{ fontFamily: T.sans, fontSize: 13, color: T.muted }}>available</span>
+            </div>
+          </div>
+          <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 22, color: T.muted, cursor: "pointer", padding: "4px 8px", lineHeight: 1 }}>×</button>
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          {items.map((item, idx) => {
+            const canAfford = cashPot >= item.cost && !item.disabled;
+            const isFirstPersonality = item.isPersonality && idx === 0;
+            const isFirstNonPersonality = !item.isPersonality && (idx === 0 || items[idx - 1]?.isPersonality);
+            return (
+              <React.Fragment key={item.id}>
+              {isFirstPersonality && (
+                <div style={{ marginBottom: -4 }}>
+                  <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: 1.2, textTransform: "uppercase", color: T.muted, margin: 0 }}>Mr. Bril Personality Packs</p>
+                  {brilPersonality !== "default" && (
+                    <button onClick={() => onPurchase("bril_reset", 0)} style={{ background: "none", border: "none", fontFamily: T.sans, fontSize: 12, color: T.brandD, cursor: "pointer", padding: "4px 0", marginTop: 2 }}>
+                      ← Switch back to Default Bril
+                    </button>
+                  )}
+                </div>
+              )}
+              {isFirstNonPersonality && (
+                <div style={{ paddingTop: 8, marginBottom: -4 }}>
+                  <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: 1.2, textTransform: "uppercase", color: T.muted, margin: 0 }}>Tools & Boosts</p>
+                </div>
+              )}
+              <div style={{
+                display: "flex", alignItems: "center", gap: 14,
+                padding: "16px 16px", borderRadius: 14,
+                background: item.highlight && canAfford ? "#FEF2F2" : canAfford ? "#FFFDF7" : "#F8F7F4",
+                border: `1.5px solid ${item.highlight && canAfford ? "#FECACA" : canAfford ? T.brandL : T.border}`,
+                opacity: item.disabled ? 0.55 : 1,
+                transition: "all 0.15s",
+              }}>
+                {item.id === "deep_dive" ? <MrBrilAvatar size={32} /> : <span style={{ fontSize: 28, flexShrink: 0 }}>{item.icon}</span>}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <p style={{ fontFamily: T.sans, fontSize: 15, fontWeight: 700, color: T.ink, margin: "0 0 3px" }}>
+                    {item.name}
+                    {item.owned != null && <span style={{ fontFamily: T.sans, fontSize: 12, color: T.muted, fontWeight: 400, marginLeft: 8 }}>{item.owned}/{item.max} owned</span>}
+                  </p>
+                  <p style={{ fontFamily: T.sans, fontSize: 13, color: T.body, margin: 0, lineHeight: 1.5 }}>{item.desc}</p>
+                </div>
+                <button
+                  disabled={!canAfford}
+                  onClick={() => canAfford && onPurchase(item.id, item.cost)}
+                  style={{
+                    background: canAfford ? T.brand : "#E8E8E8",
+                    color: canAfford ? "#1E1E2A" : "#AAA",
+                    border: "none", borderRadius: 10, padding: "10px 16px",
+                    fontFamily: T.sans, fontSize: 14, fontWeight: 700,
+                    cursor: canAfford ? "pointer" : "default",
+                    flexShrink: 0, whiteSpace: "nowrap",
+                    transition: "all 0.12s",
+                  }}>
+                  {item.disabled ? item.disabledReason : `${item.cost} ✦`}
+                </button>
+              </div>
+              </React.Fragment>
+            );
+          })}
+        </div>
+
+        {streakCount >= 7 && streakFreezes === 0 && (
+          <div style={{ marginTop: 16, padding: "12px 16px", background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 12 }}>
+            <p style={{ fontFamily: T.sans, fontSize: 13, color: "#991B1B", margin: 0, lineHeight: 1.5 }}>
+              Your {streakCount}-day streak is unprotected. A streak freeze will save it if you miss a day.
+            </p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+
+// ─── How It Works popup (shown during loading) ──────────────
+function HowItWorksPopup({ onDismiss }) {
+  const [visible, setVisible] = useState(true);
+  const [fading, setFading] = useState(false);
+  const dismiss = () => { setFading(true); setTimeout(() => { setVisible(false); onDismiss && onDismiss(); }, 600); };
+  useEffect(() => {
+    const fadeTimer = setTimeout(() => setFading(true), 9000);
+    const hideTimer = setTimeout(() => { setVisible(false); onDismiss && onDismiss(); }, 10000);
+    return () => { clearTimeout(fadeTimer); clearTimeout(hideTimer); };
+  }, []);
+  if (!visible) return null;
+  return (
+    <div style={{
+      position: "fixed", inset: 0, zIndex: 200,
+      background: "rgba(30,30,42,0.55)", backdropFilter: "blur(6px)",
+      display: "flex", alignItems: "center", justifyContent: "center",
+      padding: "24px 16px",
+      opacity: fading ? 0 : 1, transition: "opacity 0.8s ease",
+    }}
+      onClick={() => dismiss()}>
+      <div onClick={e => e.stopPropagation()} style={{
+        width: "100%", maxWidth: 420, background: "#fff", borderRadius: 24,
+        padding: "32px 28px 28px", boxShadow: "0 20px 60px rgba(0,0,0,0.2)",
+        animation: "fadeIn 0.4s ease",
+      }}>
+        <div style={{ textAlign: "center", marginBottom: 20 }}>
+          <span style={{ fontSize: 32, display: "block", marginBottom: 8 }}>✦</span>
+          <h2 style={{ fontFamily: "'Inter', sans-serif", fontSize: 22, fontWeight: 700, color: "#1E1E2A", margin: "0 0 4px", letterSpacing: -0.3 }}>Here's how this works</h2>
+          <p style={{ fontFamily: "'Inter', sans-serif", fontSize: 14, color: "#9494A6", margin: 0 }}>While we build today's session for you</p>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          {[
+            { icon: "🧠", text: "Each day, you get a program of 5–10 minute tasks" },
+            { icon: "🔓", text: "Finish one task to unlock the next" },
+            { icon: "✦", text: "Every completed task earns Sparks" },
+            { icon: "📅", text: "Missed tasks carry over to the next day" },
+            { icon: "🔥", text: "The more you complete, the faster you reach your goal" },
+          ].map((item, i) => (
+            <div key={i} style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
+              <span style={{ fontSize: 18, flexShrink: 0, marginTop: 1 }}>{item.icon}</span>
+              <p style={{ fontFamily: "'Inter', sans-serif", fontSize: 14, color: "#2C2C3A", margin: 0, lineHeight: 1.6 }}>{item.text}</p>
+            </div>
+          ))}
+        </div>
+        <button onClick={dismiss}
+          style={{
+            width: "100%", marginTop: 22, padding: "14px 0",
+            background: "#E8A820", color: "#fff", border: "none", borderRadius: 50,
+            fontFamily: "'Inter', sans-serif", fontSize: 16, fontWeight: 600, cursor: "pointer",
+            boxShadow: "0 2px 12px rgba(232,168,32,0.3)",
+          }}>
+          Got it, let's go
+        </button>
+      </div>
+    </div>
+  );
+}
+
+
 function DashboardScreen({ plan: initialPlan, onBack, startDate }) {
 
   // Local mutable copy of plan so we never mutate the parent's prop
@@ -5158,9 +5817,29 @@ function DashboardScreen({ plan: initialPlan, onBack, startDate }) {
   const [dayNotes, setDayNotes] = useState({});
   // generating: which day is currently being generated
   const [generating, setGenerating] = useState(null);
-  const [dailyTimeAvailable, setDailyTimeAvailable] = useState("30 min");
-  const [dailyTimeGenerating, setDailyTimeGenerating] = useState(false);
-  const [showCelebration, setShowCelebration] = useState({});
+  // Daily queue: pool of tasks per day — steps are the unlock unit
+  const [dailyQueue, setDailyQueue] = useState(
+    initialPlan._day1Queue ? { 1: initialPlan._day1Queue } : {}
+  );           // {[dayNum]: Task[]}
+  const [dailyQueueGenerating, setDailyQueueGenerating] = useState({}); // {[dayNum]: bool}
+  const [dailyQueueFailed, setDailyQueueFailed] = useState({}); // {[dayNum]: bool}
+  const [prefetchedTask, setPrefetchedTask] = useState(null); // next task, pre-generated in background
+  const [prefetchLoading, setPrefetchLoading] = useState(false); // background gen in progress
+  const prefetchRef = useRef(null); // ref to track which day/index the prefetch is for
+  const [showHowItWorks, setShowHowItWorks] = useState(false); // show once per session start
+  const howItWorksShownRef = useRef(false); // prevent re-showing popup
+  const queueGenAttemptedRef = useRef({}); // track which days have attempted queue gen
+  // Implementation intentions: {[`${dayNum}_${taskIdx}`]: {when, where}}
+  const [intentions, setIntentions] = useState({});
+  // Which task's intention modal is open
+  const [intentionModal, setIntentionModal] = useState(null); // {dayNum, taskIdx} | null
+  // Which completed task cards are expanded: { [`${dayNum}_${ti}`]: bool }
+  const [expandedCompletedTask, setExpandedCompletedTask] = useState({});
+  const [noteSavedFlash, setNoteSavedFlash] = useState({}); // {`${dayNum}_${ti}`: true} — brief "Saved" flash
+  const [taskSwapAnim, setTaskSwapAnim] = useState(false); // true during task swap transition
+
+  // Fixed time constant — 2-hour daily sessions with progressive micro-tasks
+  const dailyTimeAvailable = "2 hours";
   const [celebrationModal, setCelebrationModal] = useState(null); // {dayNum, earned, crossedMilestone?}
   const [credsMilestoneModal, setCredsMilestoneModal] = useState(null); // {tier, copy, total}
   const [achievementToasts, setAchievementToasts] = useState([]);
@@ -5190,7 +5869,6 @@ function DashboardScreen({ plan: initialPlan, onBack, startDate }) {
   const [weeklyCheckInOpen, setWeeklyCheckInOpen] = useState(null);
   const [weeklyCheckInDone, setWeeklyCheckInDone] = useState({});
   const [pendingWeekGen, setPendingWeekGen] = useState(null);
-  const [weekFocusEdit, setWeekFocusEdit] = useState({});
   const [weekFocusInput, setWeekFocusInput] = useState({});
   const [customGoalInput, setCustomGoalInput] = useState("");
   const [progressOpen, setProgressOpen] = useState(false);
@@ -5204,11 +5882,25 @@ function DashboardScreen({ plan: initialPlan, onBack, startDate }) {
   const [paywallBypassed, setPaywallBypassed] = useState(false);
   const [goalDeadline, setGoalDeadline] = useState(null); // ISO date string e.g. "2026-06-30"
 
-  // Reset time picker when active day changes
-  useEffect(() => {
-    setDailyTimeAvailable("30 min");
-    setDailyTimeGenerating(false);
-  }, [activeDay]); // eslint-disable-line
+  // ── Gamification: streak freeze, sparks shop, welcome back, carryover ──
+  const [streakFreezes, setStreakFreezes] = useState(0); // 0-2 freezes owned
+  const [streakFreezeUsed, setStreakFreezeUsed] = useState(false); // has ever used a freeze
+  const [streakFreezeActive, setStreakFreezeActive] = useState({}); // {dayNum: true} — which days were freeze-protected
+  const [sparksShopOpen, setSparksShopOpen] = useState(false);
+  const [bonusBrilUnlocked, setBonusBrilUnlocked] = useState(false); // one-time extra Bril session
+  const [brilPersonality, setBrilPersonality] = useState("default"); // "default" | "hype" | "drill" | "philosopher" | "chaos"
+  const [revealTomorrow, setRevealTomorrow] = useState(null); // dayNum of revealed day
+  const [carryoverTasks, setCarryoverTasks] = useState({}); // {dayNum: [task, task, ...]}
+  const [comebackCompleted, setComebackCompleted] = useState(false); // for Comeback Kid achievement
+  const [welcomeBackShown, setWelcomeBackShown] = useState(false); // has the welcome back screen been shown this session
+  const [showWelcomeBack, setShowWelcomeBack] = useState(false); // currently showing welcome back
+  const [lastCompletionTimestamp, setLastCompletionTimestamp] = useState(null); // timestamp of last 'done' day
+  const [skipConfirm, setSkipConfirm] = useState(null); // dayNum when skip confirmation is shown
+  const [streakBrokenInfo, setStreakBrokenInfo] = useState(null); // {dayNum, prevStreak, timestamp} — set when streak breaks
+  const [microCelebration, setMicroCelebration] = useState(null); // {dayNum, taskIdx, totalDone, totalTasks, nextPhase, prevPhase} or null
+  const [microCelebFading, setMicroCelebFading] = useState(false); // true when fade-out animation is playing
+  const [taskDoneAck, setTaskDoneAck] = useState({}); // {`${dayNum}_${ti}`: true} — user clicked Done, not just checked all steps
+  const [expandedTaskInfo, setExpandedTaskInfo] = useState({}); // {`${dayNum}_${ti}_desc`: true, `${dayNum}_${ti}_why`: true} — collapsible details
 
   // ── Load persisted state once on mount (async) ───────────────
   useEffect(() => {
@@ -5225,11 +5917,14 @@ function DashboardScreen({ plan: initialPlan, onBack, startDate }) {
         if (saved.adaptedWeekThemes) setAdaptedWeekThemes(saved.adaptedWeekThemes);
         if (saved.goalStatement) setGoalStatement(saved.goalStatement);
         if (saved.checkedSteps) setCheckedSteps(saved.checkedSteps);
+        if (saved.taskDoneAck) setTaskDoneAck(saved.taskDoneAck);
         if (saved.brilInsight) setBrilInsight(saved.brilInsight);
         if (saved.brilDismissed) setBrilDismissed(saved.brilDismissed);
         if (saved.brilMomentumBonus) setBrilMomentumBonus(saved.brilMomentumBonus);
         if (saved.brilChangeMade) setBrilChangeMade(saved.brilChangeMade);
         if (saved.brilPickDay) setBrilPickDay(saved.brilPickDay);
+        if (saved.dailyQueue) setDailyQueue(saved.dailyQueue);
+        if (saved.intentions) setIntentions(saved.intentions);
         if (saved.brilSessionLog?.length) setBrilSessionLog(saved.brilSessionLog);
         if (saved.brilChatHistory) setBrilChatHistory(saved.brilChatHistory);
         if (saved.weeklyCheckInDone) setWeeklyCheckInDone(saved.weeklyCheckInDone);
@@ -5238,6 +5933,16 @@ function DashboardScreen({ plan: initialPlan, onBack, startDate }) {
         if (saved.cashPot != null) setCashPot(saved.cashPot);
         if (saved.paywallBypassed) setPaywallBypassed(saved.paywallBypassed);
         if (saved.goalDeadline) setGoalDeadline(saved.goalDeadline);
+        if (saved.streakFreezes != null) setStreakFreezes(saved.streakFreezes);
+        if (saved.streakFreezeUsed) setStreakFreezeUsed(saved.streakFreezeUsed);
+        if (saved.streakFreezeActive) setStreakFreezeActive(saved.streakFreezeActive);
+        if (saved.bonusBrilUnlocked) setBonusBrilUnlocked(saved.bonusBrilUnlocked);
+        if (saved.brilPersonality) setBrilPersonality(saved.brilPersonality);
+        if (saved.revealTomorrow) setRevealTomorrow(saved.revealTomorrow);
+        if (saved.carryoverTasks) setCarryoverTasks(saved.carryoverTasks);
+        if (saved.comebackCompleted) setComebackCompleted(saved.comebackCompleted);
+        if (saved.lastCompletionTimestamp) setLastCompletionTimestamp(saved.lastCompletionTimestamp);
+        if (saved.streakBrokenInfo) setStreakBrokenInfo(saved.streakBrokenInfo);
       }
       setStorageLoaded(true);
     })();
@@ -5258,7 +5963,88 @@ function DashboardScreen({ plan: initialPlan, onBack, startDate }) {
     }
   }, [storageLoaded]); // eslint-disable-line
 
-  // ── Persist to storage on every relevant state change ───
+  // ── Welcome Back detection: show if 3+ days since last completion ──
+  const [isReducedSession, setIsReducedSession] = useState(false);
+  useEffect(() => {
+    if (!storageLoaded || welcomeBackShown) return;
+    // Find last completed day
+    const doneDays = Object.entries(dayStatus).filter(([,s]) => s === 'done');
+    if (doneDays.length === 0) return; // never completed anything, skip
+    // Estimate days since last completion using lastCompletionTimestamp or fallback
+    const lastTs = lastCompletionTimestamp;
+    if (lastTs) {
+      const daysSince = Math.floor((Date.now() - lastTs) / 86400000);
+      if (daysSince >= 3) {
+        setShowWelcomeBack(true);
+      }
+    }
+  }, [storageLoaded]); // eslint-disable-line
+
+  // ── Sparks Shop purchase handler ──
+  const handleShopPurchase = (itemId, cost) => {
+    if (itemId === "bril_reset") {
+      // Free: switch back to default personality
+      setBrilPersonality("default");
+      setSparksShopOpen(false);
+      setAchievementToasts(prev => [...prev, { id: "bril_default", icon: "🧘", name: "Default Bril Restored", desc: "Warm, direct, and back to basics.", _key: `bril-default-${Date.now()}` }]);
+      return;
+    }
+    if (cashPot < cost) return;
+    setCashPot(prev => prev - cost);
+    if (itemId === "streak_freeze") {
+      setStreakFreezes(prev => Math.min(prev + 1, 2));
+    } else if (itemId === "deep_dive") {
+      setBonusBrilUnlocked(true);
+      setBrilOpen(true);
+      setSparksShopOpen(false);
+    } else if (itemId === "goal_reset") {
+      setShowGoalEdit(true);
+      setSparksShopOpen(false);
+    } else if (itemId === "reveal_tomorrow") {
+      const tomorrow = activeDay + 1;
+      if (tomorrow <= TOTAL_DAYS && dayTasks[tomorrow]) {
+        setRevealTomorrow(tomorrow);
+      }
+      setSparksShopOpen(false);
+    } else if (itemId === "streak_repair" && streakBrokenInfo) {
+      setStreakFreezeActive(prev => ({ ...prev, [streakBrokenInfo.dayNum]: true }));
+      setStreakBrokenInfo(null);
+      setSparksShopOpen(false);
+      setAchievementToasts(prev => [...prev, {
+        id: "streak_repaired", icon: "🔧", name: "Streak Repaired",
+        desc: `Your streak is back. Don't let it break again.`,
+        _key: `repair-${Date.now()}`,
+      }]);
+    } else if (itemId === "bril_hype") {
+      setBrilPersonality("hype");
+      setSparksShopOpen(false);
+      setAchievementToasts(prev => [...prev, { id: "bril_hype", icon: "🔥", name: "Hype Bril Activated", desc: "Zero chill. Maximum encouragement. Let's GO.", _key: `bril-hype-${Date.now()}` }]);
+    } else if (itemId === "bril_drill") {
+      setBrilPersonality("drill");
+      setSparksShopOpen(false);
+      setAchievementToasts(prev => [...prev, { id: "bril_drill", icon: "🪖", name: "Drill Sergeant Bril Activated", desc: "No excuses. No shortcuts. Show up.", _key: `bril-drill-${Date.now()}` }]);
+    } else if (itemId === "bril_philosopher") {
+      setBrilPersonality("philosopher");
+      setSparksShopOpen(false);
+      setAchievementToasts(prev => [...prev, { id: "bril_philosopher", icon: "🦉", name: "Philosopher Bril Activated", desc: "The examined career is the only one worth having.", _key: `bril-philosopher-${Date.now()}` }]);
+    } else if (itemId === "bril_chaos") {
+      setBrilPersonality("chaos");
+      setSparksShopOpen(false);
+      setAchievementToasts(prev => [...prev, { id: "bril_chaos", icon: "🎰", name: "Chaos Bril Activated", desc: "You chose chaos. Bold move. Respect.", _key: `bril-chaos-${Date.now()}` }]);
+    }
+  };
+
+  // ── Welcome Back handlers ──
+  const handleWelcomeBackReduced = () => {
+    setShowWelcomeBack(false);
+    setWelcomeBackShown(true);
+    setIsReducedSession(true);
+  };
+  const handleWelcomeBackFull = () => {
+    setShowWelcomeBack(false);
+    setWelcomeBackShown(true);
+    setIsReducedSession(false);
+  };
   // Debounced to avoid hammering on rapid state changes
   const saveTimerRef = useRef(null);
   const hasHydrated = useRef(false);
@@ -5272,17 +6058,20 @@ function DashboardScreen({ plan: initialPlan, onBack, startDate }) {
       Store.set(storageKey, {
         activeDay, dayTasks, dayStatus, dayNotes,
         goalUpdatedDay, paceSlow, weekGoalOverride, adaptedWeekThemes, goalStatement,
-        checkedSteps, brilInsight, brilDismissed, brilMomentumBonus,
+        checkedSteps, taskDoneAck, brilInsight, brilDismissed, brilMomentumBonus,
         brilChangeMade, brilPickDay, brilSessionLog, brilChatHistory,
         weeklyCheckInDone, weekFocusInput, customGoalInput, cashPot,
         paywallBypassed, goalDeadline,
+        dailyQueue, intentions,
+        streakFreezes, streakFreezeUsed, streakFreezeActive, bonusBrilUnlocked, brilPersonality,
+        revealTomorrow, carryoverTasks, comebackCompleted, lastCompletionTimestamp,
+        streakBrokenInfo,
       });
       // Also update the plan's resume metadata so landing page stays current
       (async () => {
         try {
           const existing = await Store.get(PLAN_STORAGE_KEY) || {};
-          const doneCount = Object.values(dayStatus).filter(s => s === 'done').length;
-          const sc = calcStreak(dayStatus);
+          const sc = calcStreak(dayStatus, streakFreezeActive);
           Store.set(PLAN_STORAGE_KEY, {
             ...existing,
             _resumeDay: doneCount + 1,
@@ -5296,10 +6085,20 @@ function DashboardScreen({ plan: initialPlan, onBack, startDate }) {
     storageLoaded,
     activeDay, dayTasks, dayStatus, dayNotes,
     goalUpdatedDay, paceSlow, weekGoalOverride, adaptedWeekThemes, goalStatement,
-    checkedSteps, brilInsight, brilDismissed, brilMomentumBonus,
+    checkedSteps, taskDoneAck, brilInsight, brilDismissed, brilMomentumBonus,
     brilChangeMade, brilPickDay, brilSessionLog, brilChatHistory,
     weeklyCheckInDone, weekFocusInput, customGoalInput, cashPot, paywallBypassed, goalDeadline,
+    dailyQueue, intentions,
+    streakFreezes, streakFreezeUsed, streakFreezeActive, bonusBrilUnlocked, brilPersonality,
+    revealTomorrow, carryoverTasks, comebackCompleted, lastCompletionTimestamp,
+    streakBrokenInfo,
   ]); // eslint-disable-line
+
+  // Helper: reset checked steps and done acks for a day (used when queue is regenerated)
+  const resetDayProgress = (dn) => {
+    setCheckedSteps(prev => { const n = { ...prev }; Object.keys(n).forEach(k => { if (k.startsWith(`${dn}_`)) delete n[k]; }); return n; });
+    setTaskDoneAck(prev => { const n = { ...prev }; Object.keys(n).forEach(k => { if (k.startsWith(`${dn}_`)) delete n[k]; }); return n; });
+  };
 
   const tagColors = {
     "Apply":   { bg: "#FFE4D4", text: "#9A3D20", border: "#E8A080" },
@@ -5360,26 +6159,170 @@ function DashboardScreen({ plan: initialPlan, onBack, startDate }) {
     }
   }, [storageLoaded]); // eslint-disable-line
 
-  // Generate initial goal statement, skip if we already have one
+  // Generate initial goal statement — deferred to not compete with Day 1 + queue for API bandwidth
   useEffect(() => {
     if (!storageLoaded) return;
     if (!goalStatement) {
-      generateGoalStatement(plan, dayTasks, dayStatus, dayNotes).then(s => { if (s) setGoalStatement(s); });
+      const timer = setTimeout(() => {
+        generateGoalStatement(plan, dayTasks, dayStatus, dayNotes).then(s => { if (s) setGoalStatement(s); });
+      }, 4000);
+      return () => clearTimeout(timer);
     }
   }, [storageLoaded]); // eslint-disable-line
 
-  // Generate week arc (w1-w8 themes) on dashboard mount if missing
+  // Generate week arc (w1-w8 themes) on dashboard mount if missing — deferred
   useEffect(() => {
     if (!storageLoaded) return;
     if (plan.weekArc?.w1) return; // already have it
-    (async () => {
-      const arc = await generateWeekArc(plan._answers || {}, plan.classification || {}, brilInsight || plan._brilIntroInsight || "");
-      if (arc) setPlanState(prev => ({ ...prev, weekArc: arc }));
-    })();
+    const timer = setTimeout(() => {
+      (async () => {
+        const arc = await generateWeekArc(plan._answers || {}, plan.classification || {}, brilInsight || plan._brilIntroInsight || "");
+        if (arc) setPlanState(prev => ({ ...prev, weekArc: arc }));
+      })();
+    }, 3000);
+    return () => clearTimeout(timer);
   }, [storageLoaded]); // eslint-disable-line
 
+  // ── Generate single task at session start, then prefetch next in background ──
+  const startPrefetch = React.useCallback(async (dayNum, existingQueue) => {
+    if (prefetchLoading) return;
+    setPrefetchLoading(true);
+    setPrefetchedTask(null);
+    prefetchRef.current = { dayNum, index: (existingQueue || []).length };
+    try {
+      const task = await generateSingleSessionTask(plan, dayNum, existingQueue || [], dayStatus, dayNotes, dayTasks, brilInsight, dailyQueue, checkedSteps);
+      // Only set if still relevant (user hasn't moved to another day)
+      if (prefetchRef.current?.dayNum === dayNum) {
+        setPrefetchedTask(task);
+      }
+    } catch (e) { console.error("Prefetch failed:", e); }
+    setPrefetchLoading(false);
+  }, [plan, dayStatus, dayNotes, dayTasks, brilInsight, dailyQueue, checkedSteps, prefetchLoading]);
+
+  useEffect(() => {
+    if (!storageLoaded) return;
+    const dayNum = activeDay;
+    const status = dayStatus[dayNum];
+    if (status) return;
+    if (dailyQueue[dayNum] && dailyQueue[dayNum].length > 0) return;
+    if (dailyQueueGenerating[dayNum]) return;
+    if (dailyQueueFailed[dayNum]) return; // Don't auto-retry failed generations (user can retry manually)
+    if (queueGenAttemptedRef.current[dayNum]) return; // Already attempted for this day
+    queueGenAttemptedRef.current[dayNum] = true;
+    setDailyQueueGenerating(prev => ({ ...prev, [dayNum]: true }));
+    setDailyQueueFailed(prev => ({ ...prev, [dayNum]: false }));
+    if (!howItWorksShownRef.current && dayNum === 1) {
+      howItWorksShownRef.current = true;
+      setShowHowItWorks(true);
+    }
+
+    // Clear old checked state
+    setCheckedSteps(prev => { const next = { ...prev }; Object.keys(next).forEach(k => { if (k.startsWith(`${dayNum}_`)) delete next[k]; }); return next; });
+    setTaskDoneAck(prev => { const next = { ...prev }; Object.keys(next).forEach(k => { if (k.startsWith(`${dayNum}_`)) delete next[k]; }); return next; });
+
+    // Generate first 3 tasks — show task 1 immediately, tasks 2-3 queued behind
+    // Then prefetch next pair in background
+    (async () => {
+      try {
+        const task1 = await generateSingleSessionTask(plan, dayNum, [], dayStatus, dayNotes, dayTasks, brilInsight, dailyQueue, checkedSteps);
+        if (task1) {
+          const q1 = [task1];
+          setDailyQueue(prev => ({ ...prev, [dayNum]: q1 }));
+          // Generate task 2 (building on task 1)
+          const task2 = await generateSingleSessionTask(plan, dayNum, q1, dayStatus, dayNotes, dayTasks, brilInsight, dailyQueue, checkedSteps);
+          if (task2) {
+            const q2 = [task1, task2];
+            setDailyQueue(prev => ({ ...prev, [dayNum]: q2 }));
+            // Generate task 3 (building on tasks 1-2)
+            const task3 = await generateSingleSessionTask(plan, dayNum, q2, dayStatus, dayNotes, dayTasks, brilInsight, dailyQueue, checkedSteps);
+            if (task3) {
+              const q3 = [task1, task2, task3];
+              setDailyQueue(prev => ({ ...prev, [dayNum]: q3 }));
+              // Prefetch tasks 4-5 in background
+              setPrefetchLoading(true);
+              prefetchRef.current = { dayNum, index: 3 };
+              (async () => {
+                try {
+                  const task4 = await generateSingleSessionTask(plan, dayNum, q3, dayStatus, dayNotes, dayTasks, brilInsight, dailyQueue, checkedSteps);
+                  if (task4 && prefetchRef.current?.dayNum === dayNum) {
+                    const q4 = [...q3, task4];
+                    setDailyQueue(prev => ({ ...prev, [dayNum]: q4 }));
+                    prefetchRef.current = { dayNum, index: 4 };
+                    const task5 = await generateSingleSessionTask(plan, dayNum, q4, dayStatus, dayNotes, dayTasks, brilInsight, dailyQueue, checkedSteps);
+                    if (task5 && prefetchRef.current?.dayNum === dayNum) {
+                      setPrefetchedTask(task5);
+                    }
+                  }
+                } catch (e) { console.error("Background prefetch failed:", e); }
+                setPrefetchLoading(false);
+              })();
+            }
+          }
+        } else {
+          setDailyQueueFailed(prev => ({ ...prev, [dayNum]: true }));
+        }
+      } catch (e) {
+        setDailyQueueFailed(prev => ({ ...prev, [dayNum]: true }));
+      }
+      setDailyQueueGenerating(prev => ({ ...prev, [dayNum]: false }));
+    })();
+  }, [storageLoaded, activeDay]); // eslint-disable-line
+
+  // ── Auto-continue: when all queue tasks done, append prefetched or generate more ──
+  useEffect(() => {
+    if (!storageLoaded) return;
+    const dayNum = activeDay;
+    if (dayStatus[dayNum]) return; // Day already marked done/skipped
+    const queue = dailyQueue[dayNum] || [];
+    if (queue.length === 0) return;
+    // Check if all tasks in queue are acknowledged done
+    const allDone = queue.every((_, ti) => taskDoneAck[`${dayNum}_${ti}`]);
+    if (!allDone) return;
+    // All tasks done — append prefetched task if available
+    if (prefetchedTask) {
+      setDailyQueue(prev => ({ ...prev, [dayNum]: [...(prev[dayNum] || []), prefetchedTask] }));
+      setPrefetchedTask(null);
+      // Kick off next pair prefetch
+      if (!prefetchLoading) {
+        const updatedQueue = [...queue, prefetchedTask];
+        setPrefetchLoading(true);
+        prefetchRef.current = { dayNum, index: updatedQueue.length };
+        (async () => {
+          try {
+            const nextA = await generateSingleSessionTask(plan, dayNum, updatedQueue, dayStatus, dayNotes, dayTasks, brilInsight, dailyQueue, checkedSteps);
+            if (nextA && prefetchRef.current?.dayNum === dayNum) {
+              const qA = [...updatedQueue, nextA];
+              setDailyQueue(prev => ({ ...prev, [dayNum]: qA }));
+              const nextB = await generateSingleSessionTask(plan, dayNum, qA, dayStatus, dayNotes, dayTasks, brilInsight, dailyQueue, checkedSteps);
+              if (nextB && prefetchRef.current?.dayNum === dayNum) setPrefetchedTask(nextB);
+            }
+          } catch (e) { console.error("Auto-continue prefetch failed:", e); }
+          setPrefetchLoading(false);
+        })();
+      }
+    } else if (!prefetchLoading) {
+      // No prefetched task and not loading — generate more
+      setPrefetchLoading(true);
+      prefetchRef.current = { dayNum, index: queue.length };
+      (async () => {
+        try {
+          const nextA = await generateSingleSessionTask(plan, dayNum, queue, dayStatus, dayNotes, dayTasks, brilInsight, dailyQueue, checkedSteps);
+          if (nextA && prefetchRef.current?.dayNum === dayNum) {
+            const qA = [...queue, nextA];
+            setDailyQueue(prev => ({ ...prev, [dayNum]: qA }));
+            const nextB = await generateSingleSessionTask(plan, dayNum, qA, dayStatus, dayNotes, dayTasks, brilInsight, dailyQueue, checkedSteps);
+            if (nextB && prefetchRef.current?.dayNum === dayNum) setPrefetchedTask(nextB);
+          }
+        } catch (e) { console.error("Auto-continue gen failed:", e); }
+        setPrefetchLoading(false);
+      })();
+    }
+  }, [storageLoaded, activeDay, dailyQueue, taskDoneAck, prefetchedTask, prefetchLoading]); // eslint-disable-line
+
   // Refresh goal statement when a week completes or every 7 days done
-  const doneCount = Object.values(dayStatus).filter(s => s === 'done').length;
+  // Memoize done/skipped counts to avoid recomputing on every render
+  const doneCount = useMemo(() => Object.values(dayStatus).filter(s => s === 'done').length, [dayStatus]);
+  const totalSkipped = useMemo(() => Object.values(dayStatus).filter(s => s === 'skipped').length, [dayStatus]);
   useEffect(() => {
     if (doneCount > 0 && doneCount % 7 === 0) {
       generateGoalStatement(plan, dayTasks, dayStatus, dayNotes).then(s => { if (s) setGoalStatement(s); });
@@ -5412,18 +6355,16 @@ function DashboardScreen({ plan: initialPlan, onBack, startDate }) {
     return TOTAL_DAYS;
   }, [dayStatus]);
 
-  const streakCount = calcStreak(dayStatus);
+  const streakCount = calcStreak(dayStatus, streakFreezeActive);
   const currentWeek = Math.ceil(highestUnlocked / 7);
 
   // ── MOMENTUM SCORE (0–100) ──────────────────────────────
   // +8 per completed day, -3 per skipped day, +brilMomentumBonus, streak multiplier
   const momentumScore = useMemo(() => {
-    const dc = Object.values(dayStatus).filter(s => s === 'done').length;
-    const sc = Object.values(dayStatus).filter(s => s === 'skipped').length;
-    const base = dc * 8 - sc * 3;
+    const base = doneCount * 8 - totalSkipped * 3;
     const streakBonus = streakCount >= 21 ? 12 : streakCount >= 14 ? 8 : streakCount >= 7 ? 4 : streakCount >= 3 ? 2 : 0;
     return Math.max(0, Math.min(100, base + streakBonus + brilMomentumBonus));
-  }, [dayStatus, streakCount, brilMomentumBonus]);
+  }, [doneCount, totalSkipped, streakCount, brilMomentumBonus]);
 
   const momentumLabel = momentumScore >= 80 ? "Peak" : momentumScore >= 60 ? "Strong" : momentumScore >= 40 ? "Building" : momentumScore >= 20 ? "Starting" : "Day 1";
 
@@ -5455,17 +6396,96 @@ function DashboardScreen({ plan: initialPlan, onBack, startDate }) {
   }, [activeDay]); // eslint-disable-line
   const markDay = async (dayNum, status) => {
     const note = dayNotes[dayNum] || "";
+
+    // ── Streak freeze: auto-activate on skip if user owns freezes and has a meaningful streak ──
+    let newFreezeActive = { ...streakFreezeActive };
+    let freezeJustUsed = false;
+    if (status === 'skipped' && streakFreezes > 0 && streakCount >= 3) {
+      newFreezeActive[dayNum] = true;
+      setStreakFreezes(prev => prev - 1);
+      setStreakFreezeActive(newFreezeActive);
+      setStreakFreezeUsed(true);
+      freezeJustUsed = true;
+      // Show streak freeze activation toast
+      setAchievementToasts(prev => [...prev, {
+        id: "freeze_used", icon: "🛡", name: "Streak Freeze Activated",
+        desc: `Your ${streakCount}-day streak is safe. ${streakFreezes - 1} freeze${streakFreezes - 1 !== 1 ? "s" : ""} remaining.`,
+        _key: `freeze-${Date.now()}`,
+      }]);
+    }
+
+    // ── Detect streak break: skip without freeze protection while on a meaningful streak ──
+    if (status === 'skipped' && !freezeJustUsed && streakCount >= 3) {
+      setStreakBrokenInfo({ dayNum, prevStreak: streakCount, timestamp: Date.now() });
+    }
+
     // Capture which achievements were already earned before this action
-    const ctx0 = { dayStatus, dayTasks, streakCount, brilChangeMade, brilPickDay };
+    const ctx0 = { dayStatus, dayTasks, streakCount, brilChangeMade, brilPickDay, comebackCompleted, streakFreezeUsed };
     const prevEarned = new Set(ACHIEVEMENTS.filter(a => a.earned(ctx0)).map(a => a.id));
 
     // Update status
     const newStatus = { ...dayStatus, [dayNum]: status };
     setDayStatus(newStatus);
 
+    // ── Carryover: only carry tasks BEYOND the base threshold (bonus territory) ──
+    // If person hit "Today's goal hit" they completed the base — remaining tasks are bonus suggestions, not failures.
+    if (status === 'done' && dayNum < TOTAL_DAYS) {
+      const queue = dailyQueue[dayNum] || [];
+      if (queue.length > 0) {
+        // Calculate base threshold index (same logic as the goal-hit button)
+        const baseThresholds = { 1: 15, 2: 30, 3: 45, 4: 60, 5: 60, 6: 75, 7: 90, 8: 90 };
+        const baseMin = baseThresholds[Math.min(8, Math.ceil(dayNum / 7))] || 90;
+        const parseMin = (s) => { const m = String(s||"").match(/(\d+)/); return m ? parseInt(m[1]) : 10; };
+        let cumMin = 0, baseIdx = queue.length - 1;
+        for (let i = 0; i < queue.length; i++) { cumMin += parseMin(queue[i]?.time); if (cumMin >= baseMin) { baseIdx = i; break; } }
+
+        // Check if base was hit (all base steps completed)
+        const baseSteps = queue.slice(0, baseIdx + 1).reduce((s, t) => s + (t.steps?.length || 0), 0);
+        const doneSteps = queue.flatMap((t, ti) => (t.steps||[]).map((_, si) => ({ ti, si }))).filter(({ ti, si }) => (checkedSteps[`${dayNum}_${ti}`] || {})[si]).length;
+        const baseHit = doneSteps >= baseSteps && doneSteps > 0;
+
+        // Only carry over incomplete tasks from BEYOND the base threshold (bonus territory)
+        const bonusTasks = queue.slice(baseIdx + 1).filter((t, localIdx) => {
+          const realIdx = baseIdx + 1 + localIdx;
+          const sc = checkedSteps[`${dayNum}_${realIdx}`] || {};
+          return !(t.steps || []).every((_, si) => sc[si]);
+        });
+
+        if (baseHit && bonusTasks.length > 0) {
+          // These are bonus suggestions, not mandatory carryover — mark them differently
+          setCarryoverTasks(prev => ({ ...prev, [dayNum + 1]: bonusTasks.map(t => ({ ...t, isBonusCarryover: true })) }));
+        } else if (!baseHit) {
+          // Didn't hit base — carry all incomplete as actual unfinished work
+          const incompleteTasks = queue.filter((t, ti) => {
+            const sc = checkedSteps[`${dayNum}_${ti}`] || {};
+            return !(t.steps || []).every((_, si) => sc[si]);
+          });
+          if (incompleteTasks.length > 0) {
+            setCarryoverTasks(prev => ({ ...prev, [dayNum + 1]: incompleteTasks }));
+          }
+        }
+        // If base hit and no bonus tasks incomplete → no carryover at all
+      }
+    }
+
+    // ── Comeback bonus: award 15 Sparks if this is a comeback completion ──
+    let comebackBonus = 0;
+    if (status === 'done' && showWelcomeBack === false && welcomeBackShown && !comebackCompleted) {
+      // First completion after welcome back
+      comebackBonus = 15;
+      setComebackCompleted(true);
+    }
+
+    // Track last completion timestamp
+    if (status === 'done') {
+      setLastCompletionTimestamp(Date.now());
+    }
+
     // Check for newly unlocked achievements with the updated status
-    const newStreakCount = calcStreak(newStatus);
-    const ctx1 = { dayStatus: newStatus, dayTasks, streakCount: newStreakCount, brilChangeMade, brilPickDay };
+    const updatedFreezeUsed = streakFreezeUsed || (status === 'skipped' && newFreezeActive[dayNum]);
+    const updatedComeback = comebackCompleted || (comebackBonus > 0);
+    const newStreakCount = calcStreak(newStatus, newFreezeActive);
+    const ctx1 = { dayStatus: newStatus, dayTasks, streakCount: newStreakCount, brilChangeMade, brilPickDay, comebackCompleted: updatedComeback, streakFreezeUsed: updatedFreezeUsed };
     const newlyEarned = ACHIEVEMENTS.filter(a => !prevEarned.has(a.id) && a.earned(ctx1));
     if (newlyEarned.length > 0) {
       newlyEarned.forEach((a, i) => {
@@ -5477,12 +6497,26 @@ function DashboardScreen({ plan: initialPlan, onBack, startDate }) {
 
     // ── Strides award + celebration modal ────────────────
     if (status === 'done') {
-      const tag = dayTasks[dayNum]?.tag || "Apply";
+      const queue = dailyQueue[dayNum] || [];
+      // Count how many queue tasks were fully completed
+      const completedQueueTasks = queue.filter((_, ti) => {
+        const sc = checkedSteps[`${dayNum}_${ti}`] || {};
+        return (queue[ti]?.steps || []).every((_, si) => sc[si]);
+      });
+      const tasksCompleted = Math.max(completedQueueTasks.length, 1);
+      // Base creds from the primary task tag, scaled by tasks completed
+      const tag = (queue[0]?.tag) || dayTasks[dayNum]?.tag || "Apply";
       const tagCreds = { Apply: 6, Read: 4, Reflect: 5, Tool: 8 };
-      let earned = tagCreds[tag] ?? 5;
+      let earned = Math.round((tagCreds[tag] ?? 5) + (tasksCompleted - 1) * 3);
       if (newStreakCount >= 14) earned += 4;
       else if (newStreakCount >= 7) earned += 2;
       else if (newStreakCount >= 3) earned += 1;
+      // Add comeback bonus
+      earned += comebackBonus;
+      // ── Lucky Spark: ~20% chance of 1-5 bonus sparks (variable ratio reinforcement) ──
+      const luckyRoll = Math.random();
+      const luckySparks = luckyRoll < 0.20 ? Math.floor(Math.random() * 5) + 1 : 0;
+      earned += luckySparks;
       const animId = `act-${Date.now()}`;
       setCashAnimations(prev => [...prev, { id: animId, amount: earned }]);
       setTimeout(() => setCashAnimations(prev => prev.filter(a => a.id !== animId)), 1400);
@@ -5490,7 +6524,13 @@ function DashboardScreen({ plan: initialPlan, onBack, startDate }) {
       const newPot = cashPot + earned;
       const crossedMilestone = CRED_MILESTONES.find(m => cashPot < m.at && newPot >= m.at) || null;
       setTimeout(() => setCashPot(prev => prev + earned), 500);
-      setCelebrationModal({ dayNum, earned, streakCount: newStreakCount, crossedMilestone });
+      if (crossedMilestone) {
+        setTimeout(() => setCredsMilestoneModal({
+          tier: crossedMilestone.tier,
+          copy: crossedMilestone.copy,
+          total: newPot,
+        }), 600);
+      }
 
       // Pick a quote from the static library, instant, no API cost
       setDailyQuotes(prev => ({ ...prev, [dayNum]: pickQuote(dayNum) }));
@@ -5515,15 +6555,24 @@ function DashboardScreen({ plan: initialPlan, onBack, startDate }) {
           setGenerating(nextDay);
           setDayGenFailed(prev => ({ ...prev, [nextDay]: false }));
           const editSignal = dayNotes[`${dayNum}_edit`] || "";
-          const stepsChecked = checkedSteps[dayNum] || {};
-          const checkedCount = Object.values(stepsChecked).filter(Boolean).length;
-          const totalSteps = (dayTasks[dayNum]?.steps || []).length;
-          const stepsSignal = totalSteps > 0 ? `Completed ${checkedCount} of ${totalSteps} steps.` : "";
+          const queue = dailyQueue[dayNum] || [];
+          const totalStepsDone = queue.reduce((sum, _, ti) => {
+            const sc = checkedSteps[`${dayNum}_${ti}`] || {};
+            return sum + Object.values(sc).filter(Boolean).length;
+          }, 0);
+          const totalStepsAll = queue.reduce((sum, t) => sum + (t.steps?.length || 0), 0);
+          const stepsSignal = totalStepsAll > 0 ? `Completed ${totalStepsDone} of ${totalStepsAll} steps across ${queue.length} tasks.` : "";
+          const tasksCompletedCount = queue.filter((t, ti) => (t.steps||[]).every((_,si) => (checkedSteps[`${dayNum}_${ti}`]||{})[si])).length;
           const paceNote = paceSlow ? "Person requested slower pace, keep this task shorter and lower-friction." : "";
+          // Collect per-task user thoughts/reflections
+          const taskThoughts = queue.map((t, ti) => {
+            const thought = dayNotes[`${dayNum}_task_${ti}`];
+            return thought ? `Task ${ti+1} "${t.title}" thoughts: "${thought.trim()}"` : null;
+          }).filter(Boolean).join(" | ");
           const sessionLogNote = brilSessionLog.length
             ? `Bril session history: ${brilSessionLog.slice(-3).map(s => s.summary).join(" | ")}`
             : "";
-          const combinedNote = [note, stepsSignal, editSignal, paceNote, brilInsight ? `Be Brilliant coaching context: ${brilInsight.slice(0, 300)}` : "", sessionLogNote].filter(Boolean).join(" | ");
+          const combinedNote = [note, taskThoughts, stepsSignal, tasksCompletedCount > 0 ? `Completed ${tasksCompletedCount} queue tasks today.` : "", editSignal, paceNote, brilInsight ? `BeBrilliant coaching context: ${brilInsight.slice(0, 300)}` : "", sessionLogNote].filter(Boolean).join(" | ");
           const nextTask = await generateNextDayTask(plan, dayNum, status, combinedNote, brilInsight, dayTasks, dayStatus, dayNotes, dailyTimeAvailable);
           if (nextTask) {
             setDayTasks(prev => ({ ...prev, [nextDay]: nextTask }));
@@ -5540,7 +6589,7 @@ function DashboardScreen({ plan: initialPlan, onBack, startDate }) {
     const status = dayStatus[prevDay] || 'done';
     setDayGenFailed(prev => ({ ...prev, [dayNum]: false }));
     setGenerating(dayNum);
-    const note = [dayNotes[prevDay] || "", brilInsight ? `Be Brilliant coaching context: ${brilInsight.slice(0, 300)}` : ""].filter(Boolean).join(" | ");
+    const note = [dayNotes[prevDay] || "", brilInsight ? `BeBrilliant coaching context: ${brilInsight.slice(0, 300)}` : ""].filter(Boolean).join(" | ");
     const nextTask = await generateNextDayTask(plan, prevDay, status, note, brilInsight, dayTasks, dayStatus, dayNotes, dailyTimeAvailable);
     if (nextTask) {
       setDayTasks(prev => ({ ...prev, [dayNum]: nextTask }));
@@ -5645,6 +6694,7 @@ function DashboardScreen({ plan: initialPlan, onBack, startDate }) {
         @keyframes dbFloat2 { 0%, 100% { transform: translateY(0) rotate(-8deg); } 50% { transform: translateY(-9px) rotate(-4deg); } }
         @keyframes dbFloat3 { 0%, 100% { transform: translateY(0) rotate(20deg); } 50% { transform: translateY(-7px) rotate(24deg); } }
         @keyframes dbSparkle { 0%, 100% { opacity: 0.35; transform: scale(0.85); } 50% { opacity: 0.65; transform: scale(1.15); } }
+        @keyframes completedSlideIn { 0% { opacity: 0; transform: translateX(-12px); background: rgba(123,175,126,0.12); } 50% { background: rgba(123,175,126,0.08); } 100% { opacity: 1; transform: translateX(0); background: transparent; } }
         @keyframes potLand {
           0%   { transform: scale(1) rotate(0deg); }
           20%  { transform: scale(1.18) rotate(-4deg); }
@@ -5686,34 +6736,50 @@ function DashboardScreen({ plan: initialPlan, onBack, startDate }) {
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 18 }}>
             <button onClick={onBack} style={{ background: "none", border: "none", color: "#9494A6", fontFamily: T.sans, fontSize: 12, cursor: "pointer", padding: 0 }}>←</button>
             <div style={{ display: "flex", gap: 6 }}>
-              <button onClick={() => setProgressOpen(true)}
+              {/* Sparks */}
+              <button onClick={() => setSparksShopOpen(true)}
                 style={{ background: "rgba(30,30,42,0.03)", border: `1px solid ${C.border}`, borderRadius: 20, padding: "7px 14px", fontFamily: T.sans, fontSize: 13, color: "#3A3A50", cursor: "pointer", display: "flex", alignItems: "center", gap: 6, transition: "background 0.15s" }}
+                onMouseEnter={e => e.currentTarget.style.background = "rgba(30,30,42,0.06)"}
+                onMouseLeave={e => e.currentTarget.style.background = "rgba(30,30,42,0.03)"}>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d={SPARKLE_PATH} fill="#8B6914" opacity="0.7"/></svg>
+                {cashPot}
+              </button>
+              {/* Streak */}
+              <button onClick={() => {}}
+                style={{ background: "rgba(30,30,42,0.03)", border: `1px solid ${C.border}`, borderRadius: 20, padding: "7px 14px", fontFamily: T.sans, fontSize: 13, color: "#3A3A50", cursor: "pointer", display: "flex", alignItems: "center", gap: 6, transition: "background 0.15s" }}
+                onMouseEnter={e => e.currentTarget.style.background = "rgba(30,30,42,0.06)"}
+                onMouseLeave={e => e.currentTarget.style.background = "rgba(30,30,42,0.03)"}>
+                🔥 {streakCount || 0}
+              </button>
+              <button onClick={() => setProgressOpen(true)}
+                style={{ background: "rgba(30,30,42,0.03)", border: `1px solid ${C.border}`, borderRadius: 20, padding: "7px 14px", fontFamily: T.sans, fontSize: 13, color: "#3A3A50", cursor: "pointer", display: "flex", alignItems: "center", gap: 6, transition: "background 0.15s", position: "relative" }}
                 onMouseEnter={e => e.currentTarget.style.background = "rgba(30,30,42,0.06)"}
                 onMouseLeave={e => e.currentTarget.style.background = "rgba(30,30,42,0.03)"}>
                 <svg width="13" height="13" viewBox="0 0 14 14" fill="none"><rect x="1" y="7" width="3" height="6" rx="1" fill="rgba(70,60,40,0.55)"/><rect x="5.5" y="4" width="3" height="9" rx="1" fill="rgba(70,60,40,0.55)"/><rect x="10" y="1" width="3" height="12" rx="1" fill="rgba(70,60,40,0.55)"/></svg>
                 Progress
+                {(() => {
+                  const ctx = { dayStatus, dayTasks, streakCount, brilChangeMade, brilPickDay, comebackCompleted, streakFreezeUsed };
+                  const earnedCount = ACHIEVEMENTS.filter(a => a.earned(ctx)).length;
+                  return earnedCount > 0 ? (
+                    <span style={{ position: "absolute", top: -5, right: -5, minWidth: 18, height: 18, borderRadius: 9, background: T.lav, color: "#fff", fontFamily: T.sans, fontSize: 10, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 4px", border: "1.5px solid #fff" }}>{earnedCount}</span>
+                  ) : null;
+                })()}
               </button>
+              {/* Your Journey */}
               <button onClick={() => setArcOpen(o => !o)}
-                style={{ background: T.brand, border: "none", borderRadius: 20, padding: "7px 16px", fontFamily: T.sans, fontSize: 13, fontWeight: 600, color: "#1E1E2A", cursor: "pointer", display: "flex", alignItems: "center", gap: 6, transition: "all 0.15s", boxShadow: "0 2px 8px rgba(232,168,32,0.2)" }}
-                onMouseEnter={e => { e.currentTarget.style.transform = "translateY(-1px)"; e.currentTarget.style.boxShadow = "0 4px 12px rgba(232,168,32,0.3)"; }}
-                onMouseLeave={e => { e.currentTarget.style.transform = "translateY(0)"; e.currentTarget.style.boxShadow = "0 2px 8px rgba(232,168,32,0.2)"; }}>
-                <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="2.5" cy="11.5" r="1.2" fill="#1E1E2A"/><line x1="3.5" y1="10.5" x2="7.5" y2="6.5" stroke="#1E1E2A" strokeWidth="1.3" strokeLinecap="round"/><path d="M10 2C10.3 4.2 11.8 5.7 14 6C11.8 6.3 10.3 7.8 10 10C9.7 7.8 8.2 6.3 6 6C8.2 5.7 9.7 4.2 10 2Z" fill="#1E1E2A"/></svg>
-                Goal map
+                style={{ background: "rgba(30,30,42,0.03)", border: `1px solid ${C.border}`, borderRadius: 20, padding: "7px 14px", fontFamily: T.sans, fontSize: 13, color: "#3A3A50", cursor: "pointer", display: "flex", alignItems: "center", gap: 6, transition: "background 0.15s" }}
+                onMouseEnter={e => e.currentTarget.style.background = "rgba(30,30,42,0.06)"}
+                onMouseLeave={e => e.currentTarget.style.background = "rgba(30,30,42,0.03)"}>
+                <svg width="13" height="13" viewBox="0 0 14 14" fill="none"><path d="M1 7C1 3.686 3.686 1 7 1s6 2.686 6 6-2.686 6-6 6S1 10.314 1 7Z" stroke="rgba(70,60,40,0.55)" strokeWidth="1.3"/><path d="M7 4v3l2 2" stroke="rgba(70,60,40,0.55)" strokeWidth="1.3" strokeLinecap="round"/></svg>
+                Journey
               </button>
             </div>
           </div>
 
           {/* Greeting + week theme */}
           <p style={{ fontFamily: T.sans, fontSize: 15, color: "#D49518", margin: "0 0 5px", fontWeight: 600, letterSpacing: -0.2 }}>
-            {plan.name ? `${plan.name.trim()}'s program` : "Your program"} · Week {currentWeek}
+            {plan.name ? `${plan.name.trim()}'s program` : "Your program"}
           </p>
-          {/* Week theme, always displayed */}
-          <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "0 0 4px" }}>
-            <h1 style={{ fontFamily: T.sans, fontSize: "clamp(20px,3.5vw,26px)", fontWeight: 700, color: T.ink, margin: 0, lineHeight: 1.25, letterSpacing: -0.5 }}>
-              {currentWeekTheme}
-            </h1>
-          </div>
-
           {/* goal, compact */}
           {(() => {
             const goalTexts = GOAL_TEXTS;
@@ -5722,9 +6788,8 @@ function DashboardScreen({ plan: initialPlan, onBack, startDate }) {
             const daysLeft = goalDeadline ? Math.max(0, Math.ceil((new Date(goalDeadline) - new Date()) / 86400000)) : null;
             return displayText ? (
               <div style={{ margin: "0 0 16px" }}>
-                <p style={{ fontFamily: T.sans, fontSize: 15, color: T.body, margin: 0, lineHeight: 1.55 }}>
-                  <span style={{ fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", fontSize: 12, color: "#8A7830" }}>Goal </span>
-                  {displayText}
+                <p style={{ fontFamily: T.sans, fontSize: "clamp(20px, 3.5vw, 26px)", fontWeight: 700, color: T.ink, margin: 0, lineHeight: 1.35, letterSpacing: -0.3 }}>
+                  {displayText.charAt(0).toUpperCase() + displayText.slice(1)}
                 </p>
                 {daysLeft !== null && (
                   <div style={{ display: "inline-flex", alignItems: "center", gap: 6, marginTop: 8, padding: "5px 12px", borderRadius: 100, background: daysLeft <= 7 ? "#FEE2E2" : daysLeft <= 30 ? T.brandL : "rgba(30,30,42,0.04)", border: `1px solid ${daysLeft <= 7 ? "#FECACA" : daysLeft <= 30 ? T.brandMid + "60" : T.border}` }}>
@@ -5740,87 +6805,6 @@ function DashboardScreen({ plan: initialPlan, onBack, startDate }) {
             ) : null;
           })()}
 
-          {/* ── STATS ROW, compact, horizontal ── */}
-          <div style={{ display: "flex", gap: 8, alignItems: "stretch", flexWrap: "wrap" }}>
-
-            {/* Creds */}
-            <div style={{ position: "relative", flexShrink: 0 }}>
-              <div
-                onClick={() => setShowCredsLog(true)}
-                style={{
-                  height: 62, padding: "0 16px",
-                  borderRadius: 16,
-                  background: "#fff",
-                  border: "1.5px solid rgba(200,150,30,0.3)",
-                  boxShadow: "0 1px 6px rgba(180,130,20,0.1)",
-                  display: "flex", alignItems: "center", gap: 9,
-                  cursor: "pointer", transition: "box-shadow 0.15s, border-color 0.15s",
-                }}
-                onMouseEnter={e => { e.currentTarget.style.boxShadow = "0 2px 12px rgba(180,130,20,0.18)"; e.currentTarget.style.borderColor = "rgba(200,150,30,0.55)"; }}
-                onMouseLeave={e => { e.currentTarget.style.boxShadow = "0 1px 6px rgba(180,130,20,0.1)"; e.currentTarget.style.borderColor = "rgba(200,150,30,0.3)"; }}>
-                {/* Sparkle icon, matches brand ✦ motif, grows with progress */}
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" style={{ flexShrink: 0 }}>
-                  <path d="M12 2C12.6 8 16 11.4 22 12C16 12.6 12.6 16 12 22C11.4 16 8 12.6 2 12C8 11.4 11.4 8 12 2Z"
-                    fill={doneCount >= 21 ? "#E8A820" : doneCount >= 7 ? "#D49518" : doneCount >= 1 ? "#E8A820" : "#D8B860"}
-                    opacity={doneCount === 0 ? 0.4 : 1}
-                  />
-                  {doneCount >= 7 && <circle cx="19" cy="5" r="1.5" fill="#F0C050" opacity="0.7"/>}
-                  {doneCount >= 21 && <circle cx="5" cy="19" r="1" fill="#F0C050" opacity="0.6"/>}
-                </svg>
-                <div>
-                  <p key={cashPot} style={{ fontFamily: T.sans, fontSize: 18, fontWeight: 800, color: "#1E1E2A", margin: 0, lineHeight: 1, animation: cashAnimations.length > 0 ? "cashNumTick 0.35s ease 0.6s both" : "none" }}>{cashPot}</p>
-                  <p style={{ fontFamily: T.sans, fontSize: 12, color: "#8B6914", margin: 0, textTransform: "uppercase", letterSpacing: 0.7, fontWeight: 700 }}>Sparks</p>
-                </div>
-              </div>
-              {cashAnimations.map(anim => (
-                <div key={anim.id} style={{ position: "absolute", bottom: "100%", left: "50%", transform: "translateX(-50%)", pointerEvents: "none", zIndex: 10, fontFamily: T.sans, fontSize: 13, fontWeight: 800, color: "#8B6914", whiteSpace: "nowrap", textShadow: "0 2px 8px rgba(139,105,20,0.4)", animation: "actEarned 1.3s ease-out forwards" }}>+{anim.amount} ✦</div>
-              ))}
-            </div>
-
-            {/* Streak */}
-            <div style={{
-              height: 62, padding: "0 16px",
-              borderRadius: 16,
-              background: streakCount >= 7 ? "rgba(251,191,36,0.15)" : streakCount >= 3 ? "rgba(251,146,60,0.12)" : "rgba(30,30,42,0.04)",
-              border: `1px solid ${streakCount >= 7 ? "rgba(180,140,20,0.35)" : streakCount >= 3 ? "rgba(180,120,40,0.25)" : "rgba(30,30,42,0.1)"}`,
-              display: "flex", alignItems: "center", gap: 6, flexShrink: 0, transition: "all 0.3s",
-            }}>
-              <span style={{ fontSize: 16 }}>🔥</span>
-              <div>
-                <p style={{ fontFamily: T.sans, fontSize: 18, fontWeight: 800, color: T.ink, margin: 0, lineHeight: 1 }}>{streakCount || 0}</p>
-                <p style={{ fontFamily: T.sans, fontSize: 12, color: "#6E5C3A", margin: 0, textTransform: "uppercase", letterSpacing: 0.8, fontWeight: 600 }}>streak</p>
-              </div>
-            </div>
-
-            {/* Week progress, ring */}
-            {(() => {
-              const weekDone = Array.from({length:7},(_,i)=>(currentWeek-1)*7+i+1).filter(d=>dayStatus[d]==='done').length;
-              const pct = weekDone / 7;
-              const circumference = 2 * Math.PI * 17;
-              return (
-                <div style={{
-                  height: 62, padding: "0 12px 0 8px",
-                  borderRadius: 16,
-                  background: "rgba(30,30,42,0.04)",
-                  border: "1px solid rgba(30,30,42,0.1)",
-                  display: "flex", alignItems: "center", gap: 6, flexShrink: 0,
-                }}>
-                  <svg width="38" height="38" viewBox="0 0 38 38">
-                    <circle cx="19" cy="19" r="17" fill="none" stroke="rgba(30,30,42,0.1)" strokeWidth="3" />
-                    <circle cx="19" cy="19" r="17" fill="none" stroke={pct >= 1 ? "#4AE080" : "#F0C050"} strokeWidth="3" strokeLinecap="round"
-                      strokeDasharray={`${pct * circumference} ${circumference}`}
-                      style={{ transform: "rotate(-90deg)", transformOrigin: "center", transition: "stroke-dasharray 0.5s ease" }} />
-                    <text x="19" y="20" textAnchor="middle" dominantBaseline="middle" style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 800, fill: "#2C2C3A" }}>{weekDone}</text>
-                  </svg>
-                  <div>
-                    <p style={{ fontFamily: T.sans, fontSize: 11, color: "#6E5C3A", margin: 0, textTransform: "uppercase", letterSpacing: 0.6, fontWeight: 600, lineHeight: 1.3 }}>this</p>
-                    <p style={{ fontFamily: T.sans, fontSize: 11, color: "#6E5C3A", margin: 0, textTransform: "uppercase", letterSpacing: 0.6, fontWeight: 600, lineHeight: 1.3 }}>week</p>
-                  </div>
-                </div>
-              );
-            })()}
-
-          </div>
         </div>
       </div>
 
@@ -5828,7 +6812,7 @@ function DashboardScreen({ plan: initialPlan, onBack, startDate }) {
 
 
         {/* ── WEEK PLAN FAILED BANNER ── */}
-        {weekFailed && (
+        {weekFailed && !weekGenerating && (
           <div style={{ background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 10, padding: "14px 18px", marginBottom: 20, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
             <p style={{ fontFamily: T.sans, fontSize: 14, color: "#991B1B", margin: 0 }}>Could not load your week plan. Check your connection.</p>
             <button onClick={() => generateWeek(dayTasks[1])} style={{ background: "#991B1B", color: "#fff", border: "none", fontFamily: T.sans, fontSize: 13, fontWeight: 600, padding: "8px 16px", borderRadius: 10, cursor: "pointer", flexShrink: 0, marginLeft: 12 }}>Retry</button>
@@ -5864,13 +6848,7 @@ function DashboardScreen({ plan: initialPlan, onBack, startDate }) {
                       : <span style={{ fontSize: 13, color: T.brand, flexShrink: 0 }}>✓</span>
                     }
                     <span style={{ fontFamily: T.sans, fontSize: 13, fontWeight: 700, letterSpacing: 1.2, textTransform: "uppercase", color: isCurrentWk ? T.brand : T.ink, flexShrink: 0 }}>Week {wk}</span>
-                    <span style={{ fontFamily: T.sans, fontSize: 14, color: isCurrentWk ? T.ink : T.body, fontWeight: isCurrentWk ? 600 : 400, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{wkTheme}</span>
-                    {isCurrentWk && !headerWeekEdit && (
-                      <button onClick={(e) => { e.stopPropagation(); setHeaderWeekDraft(currentWeekTheme); setHeaderWeekEdit(true); }}
-                        style={{ background: "none", border: "none", fontFamily: T.sans, fontSize: 12, color: T.brandD, cursor: "pointer", padding: "2px 6px", flexShrink: 0, opacity: 0.85 }}>
-                        edit
-                      </button>
-                    )}
+                    <span style={{ fontFamily: T.sans, fontSize: isCurrentWk ? 16 : 14, color: isCurrentWk ? T.ink : T.body, fontWeight: isCurrentWk ? 700 : 400, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{wkTheme}</span>
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0, marginLeft: 8 }}>
                     <span style={{ fontFamily: T.sans, fontSize: 14, color: T.muted }}>{wkDone}/7</span>
@@ -5881,49 +6859,6 @@ function DashboardScreen({ plan: initialPlan, onBack, startDate }) {
                     )}
                   </div>
                 </div>
-
-                {/* Inline week focus edit */}
-                {isCurrentWk && headerWeekEdit && (
-                  <div style={{ padding: "10px 0 6px" }}>
-                    <input
-                      autoFocus
-                      value={headerWeekDraft}
-                      onChange={e => setHeaderWeekDraft(e.target.value)}
-                      onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); document.getElementById("inline-week-save")?.click(); } if (e.key === "Escape") setHeaderWeekEdit(false); }}
-                      placeholder="e.g. Build stakeholder visibility"
-                      style={{ width: "100%", padding: "8px 12px", border: `1.5px solid ${C.border}`, borderRadius: 10, fontFamily: T.sans, fontSize: 16, fontWeight: 600, color: T.black, background: "#fff", outline: "none", boxSizing: "border-box" }}
-                    />
-                    <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-                      <button id="inline-week-save"
-                        disabled={!headerWeekDraft.trim() || goalUpdating}
-                        onClick={async () => {
-                          const newFocus = headerWeekDraft.trim();
-                          if (!newFocus) return;
-                          setWeekGoalOverride(newFocus);
-                          setHeaderWeekEdit(false);
-                          setGoalUpdating(true);
-                          const wkStartDay = (currentWeek - 1) * 7 + 1;
-                          const remainingDays = Array.from({ length: 7 }, (_, j) => wkStartDay + j).filter(d => d > highestUnlocked && d <= wkStartDay + 6);
-                          if (remainingDays.length > 0) {
-                            const newTasks = {};
-                            for (const d of remainingDays) {
-                              const t = await generateNextDayTask(plan, d - 1, dayStatus[d - 1] || 'done', `Week focus: ${newFocus}`, brilInsight, dayTasks, dayStatus, dayNotes, dailyTimeAvailable);
-                              if (t) newTasks[d] = t;
-                            }
-                            setDayTasks(prev => ({ ...prev, ...newTasks }));
-                          }
-                          setGoalUpdating(false);
-                        }}
-                        style={{ background: headerWeekDraft.trim() && !goalUpdating ? T.brand : "rgba(30,30,42,0.04)", color: headerWeekDraft.trim() && !goalUpdating ? "#1E1E2A" : "rgba(30,30,42,0.35)", border: "none", borderRadius: 8, padding: "6px 14px", fontFamily: T.sans, fontSize: 12, fontWeight: 600, cursor: headerWeekDraft.trim() && !goalUpdating ? "pointer" : "default" }}>
-                        {goalUpdating ? "Saving…" : "Save + regenerate"}
-                      </button>
-                      <button onClick={() => setHeaderWeekEdit(false)}
-                        style={{ background: "none", border: "none", fontFamily: T.sans, fontSize: 12, color: "#6E6E80", cursor: "pointer", padding: "6px 8px" }}>
-                        Cancel
-                      </button>
-                    </div>
-                  </div>
-                )}
 
                 {/* Day tiles, shown when current or expanded */}
                 {isExpanded && (
@@ -5985,12 +6920,29 @@ function DashboardScreen({ plan: initialPlan, onBack, startDate }) {
             );
           }
 
-          if (dayGenFailed[dayNum]) {
+          if (dayGenFailed[dayNum] && !(dailyQueue[dayNum]?.length > 0) && !dailyQueueGenerating[dayNum] && !weekGenerating) {
             return (
               <div key={dayNum} style={{ textAlign: "center", padding: "48px 24px" }}>
                 <p style={{ fontFamily: T.sans, fontSize: 16, color: T.ink, margin: "0 0 6px", fontWeight: 600 }}>Could not build Day {dayNum}.</p>
                 <p style={{ fontFamily: T.sans, fontSize: 14, color: T.muted, margin: "0 0 20px", lineHeight: 1.6 }}>Check your connection and try again.</p>
-                <button onClick={() => retryDayGen(dayNum)}
+                <button onClick={() => {
+                  retryDayGen(dayNum);
+                  // Also retry queue generation
+                  setDailyQueueFailed(prev => ({ ...prev, [dayNum]: false }));
+                  setDailyQueueGenerating(prev => ({ ...prev, [dayNum]: true }));
+                  generateSingleSessionTask(plan, dayNum, [], dayStatus, dayNotes, dayTasks, brilInsight, dailyQueue, checkedSteps)
+                    .then(task => {
+                      if (task) {
+                        setDailyQueue(prev => ({ ...prev, [dayNum]: [task] }));
+                        resetDayProgress(dayNum);
+                      }
+                      else setDailyQueueFailed(prev => ({ ...prev, [dayNum]: true }));
+                      setDailyQueueGenerating(prev => ({ ...prev, [dayNum]: false }));
+                    }).catch(() => {
+                      setDailyQueueFailed(prev => ({ ...prev, [dayNum]: true }));
+                      setDailyQueueGenerating(prev => ({ ...prev, [dayNum]: false }));
+                    });
+                }}
                   style={{ background: T.brand, color: "#fff", border: "none", fontFamily: T.sans, fontSize: 14, fontWeight: 600, padding: "11px 24px", borderRadius: 10, cursor: "pointer" }}>
                   Try again
                 </button>
@@ -5998,27 +6950,59 @@ function DashboardScreen({ plan: initialPlan, onBack, startDate }) {
             );
           }
 
-          if (isGenerating || (!task && !isLocked && (weekGenerating || generating !== null))) {
+          if ((isGenerating || (!task && !isLocked && (weekGenerating || generating !== null))) && !dailyQueueGenerating[dayNum]) {
             return (
               <div key={dayNum} style={{ textAlign: "center", padding: "48px 24px" }}>
-                <div style={{ width: 40, height: 40, borderRadius: "50%", border: `3px solid ${T.brandL}`, borderTop: `3px solid ${T.brand}`, animation: "spin 0.8s linear infinite", margin: "0 auto 16px" }} />
-                <p style={{ fontFamily: T.sans, fontSize: 17, color: T.ink, margin: "0 0 4px", fontWeight: 600 }}>
-                  {`Building Day ${dayNum}...`}
+                <div style={{ position: "relative", width: 56, height: 56, margin: "0 auto 20px" }}>
+                  <div style={{
+                    width: 56, height: 56, borderRadius: "50%",
+                    background: `linear-gradient(135deg, ${T.brandL} 0%, ${T.brandMid}80 100%)`,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    animation: "queuePulse 1.8s ease-in-out infinite",
+                  }}>
+                    <span style={{ fontSize: 24, lineHeight: 1 }}>✦</span>
+                  </div>
+                </div>
+                <style>{`
+                  @keyframes queuePulse { 0%, 100% { transform: scale(1); opacity: 0.85; } 50% { transform: scale(1.06); opacity: 1; } }
+                  @keyframes queueBarSlide { 0% { transform: translateX(-100%); } 100% { transform: translateX(100%); } }
+                `}</style>
+                <p style={{ fontFamily: T.sans, fontSize: 20, fontWeight: 700, color: T.ink, margin: "0 0 8px", letterSpacing: -0.3 }}>
+                  {`Building Day ${dayNum}`}
                 </p>
-                <p style={{ fontFamily: T.sans, fontSize: 15, color: T.muted, margin: 0 }}>
+                <p style={{ fontFamily: T.sans, fontSize: 15, color: T.body, margin: "0 0 20px", lineHeight: 1.6 }}>
                   {weekGenerating ? "Generating your week ahead." : dayNum === 1 ? "Personalising your first task." : `Adapting to your progress.`}
                 </p>
+                <div style={{ width: "100%", maxWidth: 200, height: 4, background: T.border, borderRadius: 2, overflow: "hidden", margin: "0 auto" }}>
+                  <div style={{ width: "40%", height: "100%", borderRadius: 2, background: `linear-gradient(90deg, ${T.brandMid}, ${T.brand})`, animation: "queueBarSlide 1.5s ease-in-out infinite" }} />
+                </div>
               </div>
             );
           }
 
-          // Task still missing after generation finished → show retry
-          if (!task && !isLocked) {
+          // Task still missing after generation finished → show retry (only if no queue and not generating)
+          if (!task && !isLocked && !(dailyQueue[dayNum]?.length > 0) && !dailyQueueGenerating[dayNum] && !weekGenerating) {
             return (
               <div key={dayNum} style={{ textAlign: "center", padding: "48px 24px" }}>
                 <p style={{ fontFamily: T.sans, fontSize: 16, color: T.ink, margin: "0 0 6px", fontWeight: 600 }}>Could not build Day {dayNum}.</p>
                 <p style={{ fontFamily: T.sans, fontSize: 14, color: T.muted, margin: "0 0 20px", lineHeight: 1.6 }}>Check your connection and try again.</p>
-                <button onClick={() => retryDayGen(dayNum)}
+                <button onClick={() => {
+                  retryDayGen(dayNum);
+                  setDailyQueueFailed(prev => ({ ...prev, [dayNum]: false }));
+                  setDailyQueueGenerating(prev => ({ ...prev, [dayNum]: true }));
+                  generateSingleSessionTask(plan, dayNum, [], dayStatus, dayNotes, dayTasks, brilInsight, dailyQueue, checkedSteps)
+                    .then(task => {
+                      if (task) {
+                        setDailyQueue(prev => ({ ...prev, [dayNum]: [task] }));
+                        resetDayProgress(dayNum);
+                      }
+                      else setDailyQueueFailed(prev => ({ ...prev, [dayNum]: true }));
+                      setDailyQueueGenerating(prev => ({ ...prev, [dayNum]: false }));
+                    }).catch(() => {
+                      setDailyQueueFailed(prev => ({ ...prev, [dayNum]: true }));
+                      setDailyQueueGenerating(prev => ({ ...prev, [dayNum]: false }));
+                    });
+                }}
                   style={{ background: T.brand, color: "#fff", border: "none", fontFamily: T.sans, fontSize: 14, fontWeight: 600, padding: "11px 24px", borderRadius: 8, cursor: "pointer" }}>
                   Try again
                 </button>
@@ -6038,240 +7022,667 @@ function DashboardScreen({ plan: initialPlan, onBack, startDate }) {
                   <span style={{ fontFamily: T.sans, fontSize: 13, color: T.muted }}>· Day {dayNum} · {status === 'done' ? 'Completed' : 'Skipped'}</span>
                 </div>
               )}
-              {/* ── DAILY TIME PICKER, only when task not yet done/skipped ── */}
-              {!status && task && (
-                <div style={{ background: "#fff", border: `1px solid #E6E4EE`, borderRadius: 16, padding: "16px 20px", marginBottom: 16 }}>
-                  <p style={{ fontFamily: T.sans, fontSize: 15, fontWeight: 600, color: T.ink, margin: "0 0 12px" }}>How much time do you have today?</p>
-                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                    {["15 min", "30 min", "45 min", "1 hour", "3 hours", "5 hours+"].map(opt => {
-                      const sel = dailyTimeAvailable === opt;
-                      return (
-                        <button key={opt} onClick={async () => {
-                          if (dailyTimeGenerating) return;
-                          setDailyTimeAvailable(opt);
-                          setDailyTimeGenerating(true);
-
-                          // Map time slots to task count, per-task time is now API-decided
-                          const timeConfig = {
-                            "15 min": { count: 1, totalMin: 15, stepsPerTask: "1-2" },
-                            "30 min": { count: 1, totalMin: 30, stepsPerTask: "2-4" },
-                            "45 min": { count: 1, totalMin: 45, stepsPerTask: "3-5" },
-                            "1 hour": { count: 2, totalMin: 60, stepsPerTask: "2-4" },
-                            "3 hours": { count: 4, totalMin: 180, stepsPerTask: "3-5" },
-                            "5 hours+": { count: 5, totalMin: 300, stepsPerTask: "4-6" },
-                          };
-                          const cfg = timeConfig[opt] || timeConfig["30 min"];
-
-                          try {
-                            if (cfg.count === 1) {
-                              // Single task: regenerate with exact time constraint
-                              const timeHint = `TIME AVAILABLE TODAY: ${opt}. Generate exactly 1 task that takes exactly ${opt}. Include ${cfg.stepsPerTask} concrete steps. Set the "time" field to exactly "${opt}".`;
-                              const t = await generateNextDayTask(plan, dayNum - 1, dayStatus[dayNum - 1] || 'done', timeHint, brilInsight, dayTasks, dayStatus, dayNotes, dailyTimeAvailable);
-                              if (t) {
-                                t.time = opt;
-                                t._subtasks = null;
-                                setDayTasks(prev => ({ ...prev, [dayNum]: t }));
-                              }
-                            } else {
-                              // Multiple tasks: let the API decide individual time allocations based on complexity
-                              const timeHint = `TIME AVAILABLE TODAY: ${opt} (${cfg.totalMin} minutes total). Generate exactly ${cfg.count} separate career development tasks. IMPORTANT: Allocate time per task based on complexity, simpler tasks (like a quick read or reflection) should get less time, deeper tasks (like building something or writing a piece of work) should get more. The only constraint: all task "time" fields must sum to exactly ${cfg.totalMin} minutes. Each task must have ${cfg.stepsPerTask} steps. Tasks should complement each other and be diverse in type (mix of Apply, Read, Reflect, Tool). HARD RULE: NO AI tool tasks.
-
-Return ONLY valid JSON, no markdown:
-{"tasks":[${Array.from({ length: cfg.count }, () => '{"tag":"Apply|Read|Reflect","time":"X min","title":"...","desc":"...","steps":[...],"whyBase":"..."}').join(",")}]}`;
-                              try {
-                                const res = await fetch("/api/generate", {
-                                  method: "POST",
-                                  headers: { "Content-Type": "application/json" },
-                                  body: JSON.stringify({
-                                    model: "claude-sonnet-4-6",
-                                    max_tokens: 3000,
-                                    messages: [{ role: "user", content: (() => {
-                                      const _answers = plan._answers || {};
-                                      const _cl = plan.classification || {};
-                                      const _subRole = _answers.role_detail !== undefined && SUB_ROLE_QUESTIONS[_answers.role] ? SUB_ROLE_QUESTIONS[_answers.role].options[_answers.role_detail]?.text || "" : "";
-                                      const _goalDetail = _answers.goal_detail !== undefined ? ((GOAL_DETAIL_QUESTIONS[_answers.goal])?.options?.[_answers.goal_detail]?.text || "") : "";
-                                      const _goalDir = (_answers.goal_direction || "").trim();
-                                      const _goalStmt = plan._goalStatement || "";
-                                      const _style = _answers.style_outcome_process != null ? (_answers.style_outcome_process < 30 ? "action-oriented" : _answers.style_outcome_process < 50 ? "action-leaning" : _answers.style_outcome_process > 70 ? "understanding-oriented" : "understanding-leaning") : "balanced";
-                                      const _arc = plan.weekArc || {};
-                                      const _wkNum = Math.min(8, Math.ceil(dayNum / 7));
-                                      const _wkTheme = [_arc.w1, _arc.w2, _arc.w3, _arc.w4, _arc.w5, _arc.w6, _arc.w7, _arc.w8][_wkNum - 1] || "Keep building";
-                                      const _dayHist = Array.from({ length: Math.min(dayNum - 1, 7) }, (_, i) => dayNum - 1 - i).filter(d => d >= 1).reverse().map(d => {
-                                        const ds = dayStatus[d]; const dt = dayTasks[d]; const dn = dayNotes[d] || "";
-                                        return `Day ${d}: ${ds === 'done' ? 'DONE' : ds === 'skipped' ? 'SKIPPED' : 'pending'} | ${dt ? `"${dt.title}" [${dt.tag}]` : "unknown"}${dn ? ` | Note: "${dn}"` : ""}`;
-                                      }).join("\n");
-                                      return `Generate ${cfg.count} career development tasks for this person's Day ${dayNum}.
-
-═══ FULL PROFILE ═══
-Profile: ${plan.profileName}
-Role: ${plan.roleName || ROLE_NAMES[_answers.role] || "professional"}${_subRole ? ` (${_subRole})` : ""}
-Seniority: ${SENIORITY_TEXTS[_answers.seniority] || "mid-career"}
-Approach: ${_style}
-What's making it urgent: ${URG_TEXTS[_answers.urgency] || "not specified"}
-Main blockers: ${normalizeBlocker(_answers.blocker).map(b => BLOCKER_TEXTS[b]).filter(Boolean).join("; ") || "not specified"}
-Readiness: ${_cl.readinessLevel || "medium"}
-
-═══ GOAL CONTEXT ═══
-Goal: ${_answers.goal_custom || GOAL_TEXTS[_answers.goal] || "move forward"}${_goalDetail ? ` (${_goalDetail})` : ""}${_goalDir ? `\nTarget direction: ${_goalDir}` : ""}${_goalStmt ? `\nBe Brilliant-refined goal: "${_goalStmt}"` : ""}
-
-═══ THIS WEEK ═══
-Week ${_wkNum} focus: "${_wkTheme}"
-${brilInsight ? `\n═══ BE BRILLIANT COACHING CONTEXT ═══\n${brilInsight.slice(0, 400)}\n` : ""}
-═══ RECENT HISTORY ═══
-${_dayHist || "No previous days yet."}
-
-${timeHint}`;
-                                    })() }],
-                                  }),
-                                });
-                                const data = await res.json();
-                                const text = extractText(data);
-                                const start = text.indexOf("{"); const end = text.lastIndexOf("}");
-                                if (start !== -1 && end !== -1) {
-                                  const parsed = JSON.parse(text.slice(start, end + 1));
-                                  if (parsed.tasks?.length >= 1) {
-                                    const fixedTasks = parsed.tasks.slice(0, cfg.count);
-                                    const mainTask = { ...fixedTasks[0], _subtasks: fixedTasks.slice(1) };
-                                    setDayTasks(prev => ({ ...prev, [dayNum]: mainTask }));
-                                  }
-                                }
-                              } catch (innerErr) {
-                                console.error("Multi-task generation failed:", innerErr);
-                                // Fallback: single task for full duration
-                                const t = await generateNextDayTask(plan, dayNum - 1, dayStatus[dayNum - 1] || 'done', `TIME AVAILABLE TODAY: ${opt}. Generate 1 substantial task of ${opt} with ${cfg.stepsPerTask} detailed steps. Set "time" to "${opt}".`, brilInsight, dayTasks, dayStatus, dayNotes, dailyTimeAvailable);
-                                if (t) { t.time = opt; setDayTasks(prev => ({ ...prev, [dayNum]: t })); }
-                              }
-                            }
-                          } catch (outerErr) {
-                            console.error("Time picker generation failed:", outerErr);
-                          } finally {
-                            setDailyTimeGenerating(false);
-                          }
-                        }}
-                          style={{
-                            fontFamily: T.sans, fontSize: 13, fontWeight: sel ? 700 : 500,
-                            padding: "8px 16px", borderRadius: 20,
-                            border: `1.5px solid ${sel ? T.brandD : T.border}`,
-                            background: sel ? T.brandD : "#fff",
-                            color: sel ? "#fff" : T.ink,
-                            cursor: dailyTimeGenerating ? "wait" : "pointer",
-                            transition: "all 0.12s",
-                            opacity: dailyTimeGenerating && !sel ? 0.4 : 1,
-                          }}>
-                          {opt}
-                        </button>
-                      );
-                    })}
-                    {dailyTimeGenerating && (
-                      <div style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 10, marginTop: 14, padding: "14px 0", background: "#fff", borderRadius: 14, border: `1.5px solid ${T.border}`, boxShadow: "0 2px 8px rgba(30,30,42,0.04)" }}>
-                        <div style={{ width: 16, height: 16, borderRadius: "50%", border: `2.5px solid ${T.brandL}`, borderTop: `2.5px solid ${T.brand}`, animation: "spin 0.8s linear infinite" }} />
-                        <span style={{ fontFamily: T.sans, fontSize: 16, fontWeight: 600, color: T.ink }}>Building your {dailyTimeAvailable} plan…</span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {/* ── MR. BRIL TASK INVITE ── */}
-              {task && !status && (
-                <div
-                  onClick={() => setBrilOpen(true)}
-                  style={{
-                    display: "flex", alignItems: "center", gap: 14,
-                    background: "#FFFDF7", border: `1.5px solid ${T.brandMid}50`,
-                    borderRadius: 16, padding: "14px 18px", marginBottom: 16,
-                    cursor: "pointer", transition: "all 0.15s",
-                  }}
-                  onMouseEnter={e => { e.currentTarget.style.borderColor = T.brand; e.currentTarget.style.boxShadow = "0 2px 12px rgba(232,168,32,0.12)"; }}
-                  onMouseLeave={e => { e.currentTarget.style.borderColor = `${T.brandMid}50`; e.currentTarget.style.boxShadow = "none"; }}
-                >
-                  <MrBrilAvatar size={36} />
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <p style={{ fontFamily: T.sans, fontSize: 14, color: T.ink, margin: 0, lineHeight: 1.5 }}>
-                      I picked today's task based on where you are. Take a look, if it doesn't feel right, <span style={{ color: T.brandD, fontWeight: 600 }}>let's fine-tune it together</span>.
-                    </p>
-                  </div>
-                  <span style={{ fontSize: 16, color: T.brandD, flexShrink: 0 }}>→</span>
-                </div>
-              )}
-
-              {/* ── TASK CARD(S) ── */}
-              {(() => {
-                const allTasks = [task, ...(task._subtasks || [])];
+              {/* ── DAILY QUEUE: progressive unlock, step-gated ── */}
+              {!status && (() => {
+                const queue = dailyQueue[dayNum] || [];
+                const isGenQ = dailyQueueGenerating[dayNum];
+                const failedQ = dailyQueueFailed[dayNum];
                 const goalIdx2 = plan._answers?.goal ?? -1;
-                const whyLabel2 = [
-                  "Why this moves you toward that role:",
-                  "Why this makes you a stronger candidate:",
-                  "Why this builds toward the pivot:",
-                  "Why this keeps you relevant:",
-                  "Why this builds real confidence:",
-                ][goalIdx2] || "Why this matters:";
+                const whyLabel2 = ["Why this moves you toward that role:","Why this makes you a stronger candidate:","Why this builds toward the pivot:","Why this keeps you relevant:","Why this builds real confidence:"][goalIdx2] || "Why this matters:";
 
-                // Compute total time from all task time fields
-                const parseMin = (s) => { if (!s) return 0; const m = s.match(/(\d+)/); return m ? parseInt(m[1]) : 0; };
-                const totalMin = allTasks.reduce((sum, t) => sum + parseMin(t.time), 0);
-                const totalLabel = totalMin >= 60 ? (Math.floor(totalMin / 60) + "h" + (totalMin % 60 ? " " + (totalMin % 60) + "m" : "")) : (totalMin + " min");
+                // Count total steps completed across all tasks today
+                const totalStepsDone = queue.reduce((sum, t, ti) => {
+                  const sc = checkedSteps[`${dayNum}_${ti}`] || {};
+                  return sum + Object.values(sc).filter(Boolean).length;
+                }, 0);
+                const totalStepsAll = queue.reduce((sum, t) => sum + (t.steps?.length || 0), 0);
+
+                // A task is "unlocked" when all steps of the previous task are checked
+                // First task always unlocked; task N unlocks when task N-1 all steps done
+                const isTaskUnlocked = (ti) => {
+                  if (ti === 0) return true;
+                  const prev = queue[ti - 1];
+                  const prevSteps = prev?.steps || [];
+                  if (prevSteps.length === 0) return taskDoneAck[`${dayNum}_${ti - 1}`] || false;
+                  const prevChecked = checkedSteps[`${dayNum}_${ti - 1}`] || {};
+                  return prevSteps.every((_, si) => prevChecked[si]);
+                };
+
+                // Find the current active task index
+                // A task stays active until the user clicks "Done" (taskDoneAck), not just when all steps are checked
+                const activeTaskIdx = queue.findIndex((t, ti) => {
+                  if (!isTaskUnlocked(ti)) return false;
+                  const sc = checkedSteps[`${dayNum}_${ti}`] || {};
+                  const allDone = (t.steps || []).length === 0 || (t.steps || []).every((_, si) => sc[si]);
+                  const acknowledged = taskDoneAck[`${dayNum}_${ti}`];
+                  // Active if: steps not all done, OR steps done but not yet acknowledged via Done button
+                  return !allDone || !acknowledged;
+                });
+
+                if (isGenQ) return (
+                  <div style={{ textAlign: "center", padding: "48px 24px" }}>
+                      <div style={{ position: "relative", width: 56, height: 56, margin: "0 auto 20px" }}>
+                        <div style={{
+                          width: 56, height: 56, borderRadius: "50%",
+                          background: `linear-gradient(135deg, ${T.brandL} 0%, ${T.brandMid}80 100%)`,
+                          display: "flex", alignItems: "center", justifyContent: "center",
+                          animation: "queuePulse 1.8s ease-in-out infinite",
+                        }}>
+                          <span style={{ fontSize: 24, lineHeight: 1 }}>✦</span>
+                        </div>
+                      </div>
+                      <style>{`
+                        @keyframes queuePulse { 0%, 100% { transform: scale(1); opacity: 0.85; } 50% { transform: scale(1.06); opacity: 1; } }
+                        @keyframes queueBarSlide { 0% { transform: translateX(-100%); } 100% { transform: translateX(100%); } }
+                      `}</style>
+                      <p style={{ fontFamily: T.sans, fontSize: 20, fontWeight: 700, color: T.ink, margin: "0 0 8px", letterSpacing: -0.3 }}>Building today's session</p>
+                      <p style={{ fontFamily: T.sans, fontSize: 15, color: T.body, margin: "0 0 20px", lineHeight: 1.6 }}>Personalising your session to where you are right now.</p>
+                      <div style={{ width: "100%", maxWidth: 200, height: 4, background: T.border, borderRadius: 2, overflow: "hidden", margin: "0 auto" }}>
+                        <div style={{ width: "40%", height: "100%", borderRadius: 2, background: `linear-gradient(90deg, ${T.brandMid}, ${T.brand})`, animation: "queueBarSlide 1.5s ease-in-out infinite" }} />
+                      </div>
+                  </div>
+                );
+
+                if (failedQ) return (
+                  <div style={{ textAlign: "center", padding: "40px 24px" }}>
+                    <p style={{ fontFamily: T.sans, fontSize: 15, fontWeight: 600, color: T.ink, margin: "0 0 6px" }}>Couldn't build today's tasks.</p>
+                    <p style={{ fontFamily: T.sans, fontSize: 14, color: T.muted, margin: "0 0 18px" }}>Check your connection and try again.</p>
+                    <button onClick={() => {
+                      // Retry anchor task generation too
+                      retryDayGen(dayNum);
+                      queueGenAttemptedRef.current[dayNum] = false; // Allow re-attempt
+                      setDailyQueueFailed(prev => ({ ...prev, [dayNum]: false }));
+                      setDailyQueueGenerating(prev => ({ ...prev, [dayNum]: true }));
+                      generateSingleSessionTask(plan, dayNum, [], dayStatus, dayNotes, dayTasks, brilInsight, dailyQueue, checkedSteps)
+                        .then(task => {
+                          if (task) {
+                            setDailyQueue(prev => ({ ...prev, [dayNum]: [task] }));
+                            resetDayProgress(dayNum);
+                          }
+                          else setDailyQueueFailed(prev => ({ ...prev, [dayNum]: true }));
+                          setDailyQueueGenerating(prev => ({ ...prev, [dayNum]: false }));
+                        }).catch(() => {
+                          setDailyQueueFailed(prev => ({ ...prev, [dayNum]: true }));
+                          setDailyQueueGenerating(prev => ({ ...prev, [dayNum]: false }));
+                        });
+                    }} style={{ background: T.brandD, color: "#fff", border: "none", borderRadius: 10, padding: "11px 28px", fontFamily: T.sans, fontSize: 14, fontWeight: 600, cursor: "pointer" }}>
+                      Try again
+                    </button>
+                  </div>
+                );
+
+                if (queue.length === 0) return null;
+
+                // Progress dots — one per step across all tasks
+                const allStepsList = queue.flatMap((t, ti) => (t.steps||[]).map((_, si) => ({ ti, si })));
+                const stepsCompleted = allStepsList.filter(({ ti, si }) => (checkedSteps[`${dayNum}_${ti}`] || {})[si]).length;
 
                 return (
-                  <>
-                    {allTasks.length > 1 && !status && (
-                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 4px", marginBottom: 8 }}>
-                        <span style={{ fontFamily: T.sans, fontSize: 15, fontWeight: 600, color: T.ink }}>{allTasks.length} tasks for today</span>
-                        <span style={{ fontFamily: T.sans, fontSize: 15, fontWeight: 600, color: T.brand }}>Total: {totalLabel}</span>
+                  <div>
+                    {/* Mr. Bril invite strip */}
+                    <div onClick={() => setBrilOpen(true)} style={{ display: "flex", alignItems: "center", gap: 14, background: "#FFFDF7", border: `1.5px solid ${T.brandMid}50`, borderRadius: 16, padding: "12px 16px", marginBottom: 14, cursor: "pointer", transition: "all 0.15s" }}
+                      onMouseEnter={e => { e.currentTarget.style.borderColor = T.brand; e.currentTarget.style.boxShadow = "0 2px 12px rgba(232,168,32,0.12)"; }}
+                      onMouseLeave={e => { e.currentTarget.style.borderColor = `${T.brandMid}50`; e.currentTarget.style.boxShadow = "none"; }}>
+                      <MrBrilAvatar size={32} />
+                      <p style={{ fontFamily: T.sans, fontSize: 14, color: T.ink, margin: 0, lineHeight: 1.5, flex: 1 }}>
+                        I picked today's tasks based on where you are. If something doesn't feel right, <span style={{ color: T.brandD, fontWeight: 600 }}>let's fine-tune it →</span>
+                      </p>
+                    </div>
+
+                    {/* Daily progress bar — visual only, no time displayed */}
+                    {(() => {
+                      const SESSION_TOTAL_MIN = 120;
+                      const BASELINE_MIN = 15;
+                      const parseMin = (s) => { const m = String(s||"").match(/(\d+)/); return m ? parseInt(m[1]) : 5; };
+                      const minutesDone = queue.reduce((sum, t, ti) => {
+                        const acked = taskDoneAck[`${dayNum}_${ti}`];
+                        return acked ? sum + parseMin(t.time) : sum;
+                      }, 0);
+                      const progressPct = Math.min(100, (minutesDone / SESSION_TOTAL_MIN) * 100);
+                      const basePct = (BASELINE_MIN / SESSION_TOTAL_MIN) * 100;
+                      const hitBase = minutesDone >= BASELINE_MIN;
+                      const tasksAcked = Object.keys(taskDoneAck).filter(k => k.startsWith(`${dayNum}_`) && taskDoneAck[k]).length;
+                      return (
+                        <div style={{ marginBottom: 16, padding: "0 2px" }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                            <div style={{ flex: 1, height: 10, background: T.border, borderRadius: 5, overflow: "hidden", position: "relative" }}>
+                              <div style={{ position: "absolute", left: `${basePct}%`, top: -2, bottom: -2, width: 2, background: hitBase ? "#7BAF7E" : T.brandD, borderRadius: 1, zIndex: 2, transition: "background 0.3s" }} />
+                              <div style={{
+                                height: "100%", borderRadius: 4,
+                                background: hitBase ? "linear-gradient(90deg, #7BAF7E 0%, #5E9462 100%)" : minutesDone > 0 ? "linear-gradient(90deg, #E8A820 0%, #D49518 100%)" : "transparent",
+                                width: `${progressPct}%`,
+                                transition: "width 0.4s ease, background 0.3s",
+                              }} />
+                            </div>
+                            <span style={{ fontFamily: T.sans, fontSize: 13, fontWeight: 600, color: hitBase ? "#5E9462" : minutesDone > 0 ? T.brandD : T.muted, whiteSpace: "nowrap" }}>
+                              {minutesDone === 0 ? "Let's go" : hitBase ? "✦ Bonus territory" : `${tasksAcked} done`}
+                            </span>
+                          </div>
+                          {!hitBase && minutesDone > 0 && (
+                            <div style={{ marginTop: 5, padding: "0 1px" }}>
+                              <span style={{ fontFamily: T.sans, fontSize: 12, fontWeight: 500, color: T.muted }}>Today's goal</span>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
+
+                    {/* Task cards — Duolingo model: collapsed done + active owns viewport + teaser locked */}
+                    {(() => {
+                      // Count completed tasks
+                      const completedTasks = queue.map((t, ti) => {
+                        const sc = checkedSteps[`${dayNum}_${ti}`] || {};
+                        const done = (t.steps || []).every((_, si) => sc[si]);
+                        return done && ti < (activeTaskIdx === -1 ? queue.length : activeTaskIdx) ? { ...t, _ti: ti } : null;
+                      }).filter(Boolean);
+                      const completedCount = completedTasks.length;
+                      const allQueueDone = activeTaskIdx === -1;
+
+                      return (
+                        <>
+                          {/* ── COMPLETED TASK LIST — clickable, expandable ── */}
+                          {completedCount > 0 && (
+                            <div style={{ marginBottom: 10 }}>
+                              {completedTasks.map((t, idx) => {
+                                const expandKey = `${dayNum}_${t._ti}`;
+                                const isExpanded = expandedCompletedTask[expandKey];
+                                const tColors3 = tagColors[t.tag] || tagColors["Read"];
+                                const taskNote = dayNotes[`${dayNum}_task_${t._ti}`] || "";
+                                const taskIntention = intentions[`${dayNum}_${t._ti}`];
+                                return (
+                                  <div key={idx}>
+                                    <div
+                                      onClick={() => setExpandedCompletedTask(prev => ({ ...prev, [expandKey]: !prev[expandKey] }))}
+                                      style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 2px", borderBottom: !isExpanded && idx < completedCount - 1 ? `1px solid ${T.border}30` : "none", cursor: "pointer", transition: "background 0.15s", borderRadius: 8, animation: idx === completedCount - 1 ? "completedSlideIn 0.6s ease" : "none" }}
+                                      onMouseEnter={e => e.currentTarget.style.background = "rgba(30,30,42,0.02)"}
+                                      onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                                      <div style={{ width: 20, height: 20, borderRadius: "50%", background: "#D4D4D4", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                                        <svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4l2.5 2.5L9 1" stroke="#fff" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                                      </div>
+                                      <div style={{ flex: 1, minWidth: 0 }}>
+                                        <span style={{ fontFamily: T.sans, fontSize: 14, color: "#B0B0B8", textDecoration: "line-through", display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                          {t.tag} · {t.steps?.[0] || t.title}
+                                        </span>
+                                        {taskIntention && (
+                                          <span style={{ fontFamily: T.sans, fontSize: 11, color: "#7BAF7E", display: "flex", alignItems: "center", gap: 4, marginTop: 2 }}>
+                                            <svg width="10" height="10" viewBox="0 0 16 16" fill="none"><path d="M8 1v6l4 2" stroke="#7BAF7E" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/><circle cx="8" cy="8" r="7" stroke="#7BAF7E" strokeWidth="1.5"/></svg>
+                                            {taskIntention.when}{taskIntention.where ? ` · ${taskIntention.where}` : ""}
+                                          </span>
+                                        )}
+                                      </div>
+                                      <span style={{ fontFamily: T.sans, fontSize: 12, color: "#C8C8D0", flexShrink: 0 }}>{t.time}</span>
+                                      <svg width="10" height="10" viewBox="0 0 10 10" fill="none" style={{ transition: "transform 0.2s", transform: isExpanded ? "rotate(180deg)" : "rotate(0deg)", flexShrink: 0 }}>
+                                        <path d="M2 3.5l3 3 3-3" stroke="#C8C8D0" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                                      </svg>
+                                    </div>
+                                    {isExpanded && (
+                                      <div style={{ padding: "10px 12px 14px", marginBottom: idx < completedCount - 1 ? 6 : 0, background: "#FAFAF8", borderRadius: 12, border: `1px solid ${T.border}50`, animation: "fadeIn 0.2s ease" }}>
+                                        {/* Tag + time */}
+                                        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+                                          <span style={{ fontFamily: T.sans, fontSize: 10, fontWeight: 700, letterSpacing: 0.8, textTransform: "uppercase", padding: "2px 8px", background: tColors3.bg, color: tColors3.text, border: `1px solid ${tColors3.border}`, borderRadius: 5, opacity: 0.6 }}>{t.tag}</span>
+                                          <span style={{ fontFamily: T.sans, fontSize: 11, color: T.muted }}>{t.time}</span>
+                                        </div>
+                                        {/* Scheduled commitment */}
+                                        {taskIntention && (
+                                          <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 10px", background: "#EEF6F0", border: "1px solid #A8D4B4", borderRadius: 8, marginBottom: 10 }}>
+                                            <svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M8 1v6l4 2" stroke="#3B7A56" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/><circle cx="8" cy="8" r="7" stroke="#3B7A56" strokeWidth="1.5"/></svg>
+                                            <span style={{ fontFamily: T.sans, fontSize: 12, color: "#3B7A56", fontWeight: 500 }}>
+                                              Scheduled: {taskIntention.when}{taskIntention.where ? ` · ${taskIntention.where}` : ""}
+                                            </span>
+                                          </div>
+                                        )}
+                                        {/* Steps — all crossed out */}
+                                        {(t.steps || []).map((step, si) => (
+                                          <div key={si} style={{ display: "flex", gap: 8, alignItems: "flex-start", marginBottom: 4 }}>
+                                            <div style={{ width: 16, height: 16, borderRadius: 4, background: tColors3.text, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, marginTop: 2, opacity: 0.5 }}>
+                                              <svg width="8" height="7" viewBox="0 0 12 10" fill="none"><path d="M1 5l3.5 3.5L11 1" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                                            </div>
+                                            <span style={{ fontFamily: T.sans, fontSize: 13, color: "#B0B0B8", lineHeight: 1.5, textDecoration: "line-through" }}>{step}</span>
+                                          </div>
+                                        ))}
+                                        {/* Description */}
+                                        {t.desc && <p style={{ fontFamily: T.sans, fontSize: 12, color: T.muted, margin: "8px 0 0", lineHeight: 1.6, fontStyle: "italic" }}>{t.desc}</p>}
+                                        {/* Their note if they wrote one */}
+                                        {taskNote.trim() && (
+                                          <div style={{ marginTop: 10, padding: "8px 12px", background: "#fff", borderRadius: 8, border: `1px solid ${T.border}` }}>
+                                            <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 600, color: T.muted, margin: "0 0 4px" }}>Your notes</p>
+                                            <p style={{ fontFamily: T.sans, fontSize: 13, color: T.body, margin: 0, lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{taskNote}</p>
+                                          </div>
+                                        )}
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+
+                          {/* ── ACTIVE TASK CARD — owns the viewport ── */}
+                          {queue.map((t, ti) => {
+                            const tColors = tagColors[t.tag] || tagColors["Read"];
+                            const unlocked = isTaskUnlocked(ti);
+                            const taskChecked = checkedSteps[`${dayNum}_${ti}`] || {};
+                            const allStepsDone = (t.steps || []).length === 0 || (t.steps || []).every((_, si) => taskChecked[si]);
+                            const hasReflection = (dayNotes[`${dayNum}_task_${ti}`] || "").trim().length > 0;
+                            const canFinish = allStepsDone;
+                            const isActive = ti === activeTaskIdx;
+                            const intentKey = `${dayNum}_${ti}`;
+                            const intention = intentions[intentKey];
+                            const isLastTask = ti === queue.length - 1;
+
+                            // Skip completed and locked tasks (handled separately)
+                            if (!isActive) return null;
+
+                            return (
+                              <div key={ti} id={`task-card-${dayNum}-${ti}`} style={{ background: "#fff", border: `1.5px solid ${T.brandMid}`, borderRadius: 20, padding: "clamp(18px,4vw,26px) clamp(16px,3vw,22px)", marginBottom: 12, boxShadow: "0 4px 20px rgba(232,168,32,0.10)", transition: "all 0.2s", animation: "taskSwapIn 0.7s cubic-bezier(0.22,1,0.36,1)" }}>
+                                {/* Difficulty phase + carryover badges */}
+                                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: t.isCarryover || intention ? 10 : 0, flexWrap: "wrap" }}>
+                                  {t.isCarryover && (
+                                    <span style={{ fontFamily: T.sans, fontSize: 10, fontWeight: 700, letterSpacing: 0.8, textTransform: "uppercase", padding: "3px 8px", background: t.isBonusCarryover ? "#FFFBEB" : "#FEF2F2", color: t.isBonusCarryover ? "#92400E" : "#991B1B", borderRadius: 4 }}>{t.isBonusCarryover ? "Suggested from yesterday" : "Unfinished from yesterday"}</span>
+                                  )}
+                                  {intention && (
+                                    <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 10px", background: "#EEF6F0", border: "1px solid #A8D4B4", borderRadius: 8 }}>
+                                      <svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M8 1v6l4 2" stroke="#3B7A56" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/><circle cx="8" cy="8" r="7" stroke="#3B7A56" strokeWidth="1.5"/></svg>
+                                      <span style={{ fontFamily: T.sans, fontSize: 11, color: "#3B7A56", fontWeight: 600 }}>
+                                        {intention.when}{intention.where ? ` · ${intention.where}` : ""}
+                                      </span>
+                                    </div>
+                                  )}
+                                </div>
+                                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+                                  <span style={{ fontFamily: T.sans, fontSize: 12, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", padding: "4px 10px", background: tColors.bg, color: tColors.text, border: `1.5px solid ${tColors.border}`, borderRadius: 6 }}>{t.tag}</span>
+                                  <span style={{ fontFamily: T.sans, fontSize: 14, color: T.body }}>{t.time}</span>
+                                  <span style={{ marginLeft: "auto", fontFamily: T.sans, fontSize: 12, color: T.muted }}>Task {ti + 1}</span>
+                                </div>
+
+                                {/* Steps — Duolingo-style sequential unlock */}
+                                <div style={{ display: "flex", flexDirection: "column", gap: 0, marginBottom: 16, background: `${tColors.bg}90`, borderRadius: 14, padding: "4px 0", border: `1px solid ${tColors.border}40` }}>
+                                  {(t.steps || []).map((step, si) => {
+                                    const checked = taskChecked[si] || false;
+                                    const prevDone = si === 0 || taskChecked[si - 1];
+                                    const stepsCheckedCount = (t.steps || []).filter((_, i) => taskChecked[i]).length;
+                                    const isNext = prevDone && !checked; // this is the next step to do
+                                    return (
+                                      <div key={si}
+                                        className="step-row"
+                                        style={{
+                                          display: "flex", alignItems: "flex-start", gap: 12,
+                                          padding: "12px 14px", margin: "0 4px",
+                                          borderRadius: 10,
+                                          background: isNext ? `${tColors.bg}` : "transparent",
+                                          borderBottom: si < (t.steps || []).length - 1 ? `1px solid ${tColors.border}25` : "none",
+                                          cursor: prevDone ? "pointer" : "default",
+                                          opacity: prevDone ? 1 : 0.35,
+                                          transition: "all 0.2s ease",
+                                        }}
+                                        onMouseEnter={e => { if (prevDone && !checked) e.currentTarget.style.background = tColors.bg; }}
+                                        onMouseLeave={e => { e.currentTarget.style.background = isNext ? tColors.bg : "transparent"; }}
+                                        onClick={() => {
+                                          if (!prevDone) return;
+                                          const newChecked = { ...taskChecked, [si]: !checked };
+                                          setCheckedSteps(prev => ({ ...prev, [`${dayNum}_${ti}`]: newChecked }));
+                                        }}>
+                                        <div style={{
+                                          width: 24, height: 24, borderRadius: 6,
+                                          border: `2px solid ${checked ? tColors.text : isNext ? tColors.border : T.border}`,
+                                          background: checked ? tColors.text : "#fff",
+                                          display: "flex", alignItems: "center", justifyContent: "center",
+                                          flexShrink: 0, marginTop: 1,
+                                          transition: "all 0.2s cubic-bezier(0.22,1,0.36,1)",
+                                          animation: checked ? "stepCheckPop 0.35s cubic-bezier(0.22,1,0.36,1)" : "none",
+                                          boxShadow: isNext ? `0 0 0 3px ${tColors.border}30` : "none",
+                                          cursor: prevDone ? "pointer" : "default",
+                                        }}>
+                                          {checked
+                                            ? <svg width="12" height="10" viewBox="0 0 12 10" fill="none"><path d="M1 5l3.5 3.5L11 1" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                                            : null
+                                          }
+                                        </div>
+                                        <div style={{ flex: 1, paddingTop: 3 }}>
+                                          <span style={{
+                                            fontFamily: T.sans, fontSize: 14, fontWeight: isNext ? 600 : 400,
+                                            color: checked ? T.muted : isNext ? T.ink : T.body,
+                                            lineHeight: 1.55,
+                                            textDecoration: checked ? "line-through" : "none",
+                                            transition: "all 0.2s",
+                                          }}>{step}</span>
+                                          {isNext && (
+                                            <span style={{ display: "block", fontFamily: T.sans, fontSize: 11, color: tColors.text, marginTop: 2, fontWeight: 500 }}>Tap to check off</span>
+                                          )}
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                  {/* Step progress micro-bar */}
+                                  {(t.steps || []).length > 1 && (() => {
+                                    const done = (t.steps || []).filter((_, i) => taskChecked[i]).length;
+                                    const total = (t.steps || []).length;
+                                    return (
+                                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8, padding: "0 14px 8px" }}>
+                                        <div style={{ flex: 1, height: 4, background: `${tColors.border}40`, borderRadius: 2, overflow: "hidden" }}>
+                                          <div style={{ height: "100%", borderRadius: 2, background: done === total ? tColors.text : tColors.border, width: `${(done/total)*100}%`, transition: "width 0.4s cubic-bezier(0.22,1,0.36,1)" }} />
+                                        </div>
+                                        <span style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 600, color: done === total ? tColors.text : T.muted, whiteSpace: "nowrap" }}>
+                                          {done === total ? "All done" : `${done}/${total}`}
+                                        </span>
+                                      </div>
+                                    );
+                                  })()}
+                                </div>
+                                <style>{`@keyframes stepCheckPop { 0% { transform: scale(0.8); } 50% { transform: scale(1.2); } 100% { transform: scale(1); } }
+                @keyframes taskSwapIn { 0% { opacity: 0; transform: translateY(40px) scale(0.95); } 40% { opacity: 0.3; } 100% { opacity: 1; transform: translateY(0) scale(1); } }
+                @keyframes taskSwapOut { 0% { opacity: 1; transform: translateY(0) scale(1); } 100% { opacity: 0; transform: translateY(-20px) scale(0.96); } }`}</style>
+
+                                {/* Collapsible details: desc + why this matters — after steps */}
+                                {(t.desc || t.whyBase || t.why) && (
+                                  <>
+                                    <button onClick={() => setExpandedTaskInfo(prev => ({ ...prev, [`${dayNum}_${ti}_desc`]: !prev[`${dayNum}_${ti}_desc`] }))}
+                                      style={{ background: "none", border: "none", fontFamily: T.sans, fontSize: 13, color: T.brandD, cursor: "pointer", padding: "6px 0 10px", display: "flex", alignItems: "center", gap: 4 }}>
+                                      <svg width="10" height="10" viewBox="0 0 10 10" fill="none" style={{ transition: "transform 0.2s", transform: expandedTaskInfo[`${dayNum}_${ti}_desc`] ? "rotate(90deg)" : "rotate(0deg)" }}>
+                                        <path d="M3 1l4 4-4 4" stroke={T.brandD} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                                      </svg>
+                                      {expandedTaskInfo[`${dayNum}_${ti}_desc`] ? "Hide details" : "More details"}
+                                    </button>
+                                    {expandedTaskInfo[`${dayNum}_${ti}_desc`] && (
+                                      <div style={{ animation: "fadeIn 0.2s ease", marginBottom: 12 }}>
+                                        {(() => {
+                                          // Only show parentTask if it's a daily sub-task grouping, not the overall goal
+                                          const pt = t.parentTask;
+                                          if (!pt) return null;
+                                          const goalText = (plan._answers?.goal_custom || GOAL_TEXTS[plan._answers?.goal] || "").toLowerCase();
+                                          const ptLower = pt.toLowerCase();
+                                          // Skip if parentTask closely matches overall goal
+                                          if (goalText && (ptLower.includes(goalText.slice(0, 30)) || goalText.includes(ptLower.slice(0, 30)))) return null;
+                                          // Skip generic goal-like parentTasks
+                                          if (/^(career|goal|program|your goal|move forward|get promoted|land a|find a|build skill)/i.test(pt)) return null;
+                                          return (
+                                            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10 }}>
+                                              <div style={{ width: 5, height: 5, borderRadius: "50%", background: T.brand, flexShrink: 0 }} />
+                                              <span style={{ fontFamily: T.sans, fontSize: 12, fontWeight: 600, color: T.brandD }}>Part of: {pt}</span>
+                                            </div>
+                                          );
+                                        })()}
+                                        {t.desc && <p style={{ fontFamily: T.sans, fontSize: 15, color: T.ink, margin: "0 0 12px", lineHeight: 1.8 }}>{t.desc}</p>}
+                                        {(t.whyBase || t.why) && (
+                                          <div style={{ borderLeft: `3px solid ${tColors.border || T.border}`, paddingLeft: 14 }}>
+                                            <p style={{ fontFamily: T.sans, fontSize: 14, color: T.body, margin: 0, lineHeight: 1.7 }}>
+                                              <strong style={{ color: T.ink, fontSize: 13 }}>{whyLabel2} </strong>{t.whyBase || t.why}
+                                            </p>
+                                          </div>
+                                        )}
+                                      </div>
+                                    )}
+                                  </>
+                                )}
+
+                                {/* Reflection / work area */}
+                                <div style={{ background: "#FAFAF8", border: `1px solid ${T.border}`, borderRadius: 14, padding: "14px 16px", marginBottom: 12 }}>
+                                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+                                    <p style={{ fontFamily: T.sans, fontSize: 13, fontWeight: 600, color: T.ink, margin: 0 }}>Your thoughts</p>
+                                    {(dayNotes[`${dayNum}_task_${ti}`] || "").trim() && (
+                                      <button
+                                        onClick={() => {
+                                          setNoteSavedFlash(prev => ({ ...prev, [`${dayNum}_${ti}`]: true }));
+                                          setTimeout(() => setNoteSavedFlash(prev => ({ ...prev, [`${dayNum}_${ti}`]: false })), 1800);
+                                        }}
+                                        style={{
+                                          background: noteSavedFlash[`${dayNum}_${ti}`] ? "#E8F5E9" : "rgba(30,30,42,0.04)",
+                                          border: `1px solid ${noteSavedFlash[`${dayNum}_${ti}`] ? "#A5D6A7" : T.border}`,
+                                          borderRadius: 8, padding: "4px 12px",
+                                          fontFamily: T.sans, fontSize: 12, fontWeight: 600,
+                                          color: noteSavedFlash[`${dayNum}_${ti}`] ? "#2E7D32" : T.body,
+                                          cursor: "pointer", transition: "all 0.2s",
+                                          display: "flex", alignItems: "center", gap: 4,
+                                        }}>
+                                        {noteSavedFlash[`${dayNum}_${ti}`]
+                                          ? <><svg width="12" height="10" viewBox="0 0 12 10" fill="none"><path d="M1 5l3.5 3.5L11 1" stroke="#2E7D32" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg> Saved</>
+                                          : "Save"
+                                        }
+                                      </button>
+                                    )}
+                                  </div>
+                                  <textarea
+                                    placeholder="Work through it here — jot notes, draft ideas, reflect on what you found..."
+                                    value={(dayNotes[`${dayNum}_task_${ti}`] || "")}
+                                    onChange={e => setDayNotes(prev => ({ ...prev, [`${dayNum}_task_${ti}`]: e.target.value }))}
+                                    style={{
+                                      width: "100%", minHeight: 100, padding: "12px 14px",
+                                      border: `1px solid ${T.border}`, borderRadius: 10,
+                                      fontFamily: T.sans, fontSize: 14, color: T.ink,
+                                      lineHeight: 1.65, outline: "none", resize: "vertical",
+                                      boxSizing: "border-box", background: "#fff",
+                                      transition: "border-color 0.15s",
+                                    }}
+                                    onFocus={e => e.currentTarget.style.borderColor = T.brandMid}
+                                    onBlur={e => e.currentTarget.style.borderColor = T.border}
+                                  />
+                                </div>
+
+                                {/* Action buttons — side by side */}
+                                <div style={{ display: "flex", gap: 10, marginTop: 4 }}>
+                                  <button
+                                    disabled={!canFinish}
+                                    onClick={() => {
+                                      if (!canFinish) return;
+                                      // Auto-check all steps
+                                      if ((t.steps || []).length > 0) {
+                                        const autoChecked = {};
+                                        (t.steps || []).forEach((_, si) => { autoChecked[si] = true; });
+                                        setCheckedSteps(prev => ({ ...prev, [`${dayNum}_${ti}`]: autoChecked }));
+                                      }
+                                      setTaskDoneAck(prev => ({ ...prev, [`${dayNum}_${ti}`]: true }));
+
+                                      // Trigger task swap animation
+                                      setTaskSwapAnim(true);
+                                      setTimeout(() => setTaskSwapAnim(false), 500);
+
+                                      // Append prefetched task to queue if available
+                                      const currentQueue = dailyQueue[dayNum] || [];
+                                      if (prefetchedTask) {
+                                        const updatedQueue = [...currentQueue, prefetchedTask];
+                                        setDailyQueue(prev => ({ ...prev, [dayNum]: updatedQueue }));
+                                        setPrefetchedTask(null);
+                                        // Start prefetching next pair in background
+                                        if (!prefetchLoading) {
+                                          setPrefetchLoading(true);
+                                          prefetchRef.current = { dayNum, index: updatedQueue.length };
+                                          (async () => {
+                                            try {
+                                              const nextA = await generateSingleSessionTask(plan, dayNum, updatedQueue, dayStatus, dayNotes, dayTasks, brilInsight, dailyQueue, checkedSteps);
+                                              if (nextA && prefetchRef.current?.dayNum === dayNum) {
+                                                const qA = [...updatedQueue, nextA];
+                                                setDailyQueue(prev => ({ ...prev, [dayNum]: qA }));
+                                                const nextB = await generateSingleSessionTask(plan, dayNum, qA, dayStatus, dayNotes, dayTasks, brilInsight, dailyQueue, checkedSteps);
+                                                if (nextB && prefetchRef.current?.dayNum === dayNum) {
+                                                  setPrefetchedTask(nextB);
+                                                }
+                                              }
+                                            } catch (e) { console.error("Pair prefetch failed:", e); }
+                                            setPrefetchLoading(false);
+                                          })();
+                                        }
+                                      } else if (!prefetchLoading) {
+                                        // No prefetch ready and not loading — start pair prefetch
+                                        setPrefetchLoading(true);
+                                        prefetchRef.current = { dayNum, index: currentQueue.length };
+                                        (async () => {
+                                          try {
+                                            const nextA = await generateSingleSessionTask(plan, dayNum, currentQueue, dayStatus, dayNotes, dayTasks, brilInsight, dailyQueue, checkedSteps);
+                                            if (nextA && prefetchRef.current?.dayNum === dayNum) {
+                                              const qA = [...currentQueue, nextA];
+                                              setDailyQueue(prev => ({ ...prev, [dayNum]: qA }));
+                                              const nextB = await generateSingleSessionTask(plan, dayNum, qA, dayStatus, dayNotes, dayTasks, brilInsight, dailyQueue, checkedSteps);
+                                              if (nextB && prefetchRef.current?.dayNum === dayNum) {
+                                                setPrefetchedTask(nextB);
+                                              }
+                                            }
+                                          } catch (e) { console.error("Pair prefetch failed:", e); }
+                                          setPrefetchLoading(false);
+                                        })();
+                                      }
+
+                                      // Scroll to next task
+                                      setTimeout(() => {
+                                        const nextEl = document.getElementById(`task-card-${dayNum}-${ti + 1}`);
+                                        if (nextEl) nextEl.scrollIntoView({ behavior: "smooth", block: "center" });
+                                      }, 200);
+                                    }}
+                                    style={{
+                                      flex: 2, padding: "14px 0",
+                                      background: canFinish ? T.brandD : "#D4D4D8",
+                                      color: canFinish ? "#fff" : "#9CA3AF",
+                                      border: "none", borderRadius: 50, fontFamily: T.sans, fontSize: 16, fontWeight: 600,
+                                      cursor: canFinish ? "pointer" : "default",
+                                      boxShadow: canFinish ? "0 2px 12px rgba(232,168,32,0.25)" : "none",
+                                      transition: "all 0.3s ease",
+                                      opacity: canFinish ? 1 : 0.7,
+                                    }}
+                                    onMouseEnter={e => { if (canFinish) e.currentTarget.style.transform = "translateY(-1px) scale(1.01)"; }}
+                                    onMouseLeave={e => { e.currentTarget.style.transform = "scale(1)"; }}>
+                                    {canFinish ? "I finished!" : "Complete all steps first"}
+                                  </button>
+                                  <button
+                                    onClick={() => {
+                                      setIntentionModal({ dayNum, taskIdx: ti });
+                                    }}
+                                    style={{
+                                      flex: 1, padding: "14px 0",
+                                      background: "rgba(30,30,42,0.03)",
+                                      color: T.muted,
+                                      border: `1px solid ${T.border}`, borderRadius: 50, fontFamily: T.sans, fontSize: 14, fontWeight: 500,
+                                      cursor: "pointer",
+                                      transition: "all 0.15s",
+                                    }}
+                                    onMouseEnter={e => { e.currentTarget.style.background = "rgba(30,30,42,0.06)"; e.currentTarget.style.borderColor = T.brandMid; }}
+                                    onMouseLeave={e => { e.currentTarget.style.background = "rgba(30,30,42,0.03)"; e.currentTarget.style.borderColor = T.border; }}>
+                                    Schedule for later
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          })}
+
+
+                          {/* ── NEXT TASK LOADING — shows when prefetch is in progress ── */}
+                          {prefetchLoading && (activeTaskIdx === queue.length - 1 || activeTaskIdx === -1) && (
+                            <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "18px 16px", marginBottom: 8, borderRadius: 14, border: `1.5px dashed ${T.border}`, background: "#FAFAF8" }}>
+                              <div style={{ width: 20, height: 20, borderRadius: "50%", border: `2.5px solid ${T.brandL}`, borderTop: `2.5px solid ${T.brand}`, animation: "spin 0.8s linear infinite", flexShrink: 0 }} />
+                              <span style={{ fontFamily: T.sans, fontSize: 14, color: T.muted }}>Generating your next task...</span>
+                            </div>
+                          )}
+
+                          {/* ── LOCKED TASK PLACEHOLDERS — single line with blurred text ── */}
+                          {(() => {
+                            const placeholderCount = 5;
+                            if (placeholderCount <= 0) return null;
+                            const fakeTags = ["Reflect", "Read", "Apply", "Reflect", "Read"];
+                            const fakeTexts = [
+                              "Reflect on the gap between where you are...",
+                              "Read about how leading professionals in...",
+                              "Draft a positioning statement for your...",
+                              "Write down three things you learned from...",
+                              "Identify the one skill that would change...",
+                            ];
+                            const fakeTimes = ["8 min", "10 min", "12 min", "5 min", "15 min"];
+                            return (
+                              <div style={{ marginBottom: 8 }}>
+                                {Array.from({ length: Math.min(placeholderCount, 5) }, (_, idx) => {
+                                  const tag = fakeTags[idx % fakeTags.length];
+                                  const tColors2 = tagColors[tag] || tagColors["Read"];
+                                  return (
+                                    <div key={idx} style={{
+                                      display: "flex", alignItems: "center", gap: 10,
+                                      padding: "12px 16px", marginBottom: 6,
+                                      borderRadius: 12, border: `1.5px solid ${T.border}`,
+                                      background: "#fff", position: "relative", overflow: "hidden",
+                                    }}>
+                                      {/* Blur overlay */}
+                                      <div style={{
+                                        position: "absolute", inset: 0, zIndex: 2,
+                                        background: "rgba(255,255,255,0.5)",
+                                        backdropFilter: "blur(3px)", WebkitBackdropFilter: "blur(3px)",
+                                        display: "flex", alignItems: "center", justifyContent: "center",
+                                      }}>
+                                        <div style={{ display: "flex", alignItems: "center", gap: 6, background: "rgba(255,255,255,0.85)", padding: "5px 14px", borderRadius: 16 }}>
+                                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+                                            <rect x="3" y="11" width="18" height="11" rx="2.5" stroke={T.muted} strokeWidth="1.8"/>
+                                            <path d="M7 11V7a5 5 0 0 1 10 0v4" stroke={T.muted} strokeWidth="1.8" strokeLinecap="round"/>
+                                          </svg>
+                                          <span style={{ fontFamily: T.sans, fontSize: 13, fontWeight: 600, color: T.muted }}>
+                                            {idx === 0 ? "Complete current task" : "Locked"}
+                                          </span>
+                                        </div>
+                                      </div>
+                                      {/* Visible blurred content behind overlay */}
+                                      <span style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: 0.8, textTransform: "uppercase", padding: "3px 8px", background: tColors2.bg, color: tColors2.text, border: `1px solid ${tColors2.border}`, borderRadius: 5, flexShrink: 0, zIndex: 1 }}>{tag}</span>
+                                      <span style={{ fontFamily: T.sans, fontSize: 14, color: T.body, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", zIndex: 1 }}>{fakeTexts[idx % fakeTexts.length]}</span>
+                                      <span style={{ fontFamily: T.sans, fontSize: 12, color: T.muted, flexShrink: 0, zIndex: 1 }}>{fakeTimes[idx % fakeTimes.length]}</span>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            );
+                          })()}
+
+                        </>
+                      );
+                    })()}
+
+                    {skipConfirm === dayNum && (
+                      <div style={{ marginTop: 8, background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 14, padding: "16px 18px" }}>
+                        <p style={{ fontFamily: T.sans, fontSize: 14, fontWeight: 600, color: "#991B1B", margin: "0 0 8px" }}>Skip Day {dayNum}?</p>
+                        <p style={{ fontFamily: T.sans, fontSize: 13, color: "#7F1D1D", margin: "0 0 4px", lineHeight: 1.55 }}>
+                          {streakCount >= 3 && streakFreezes > 0
+                            ? `Your streak freeze will activate. ${streakFreezes - 1} freeze${streakFreezes - 1 !== 1 ? "s" : ""} will remain.`
+                            : streakCount >= 3
+                            ? `You'll lose your ${streakCount}-day streak and miss ~6 Sparks.`
+                            : `You'll miss ~6 Sparks for today.`
+                          }
+                        </p>
+                        <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+                          <button onClick={() => { setSkipConfirm(null); markDay(dayNum, 'skipped'); }}
+                            style={{ flex: 1, padding: "10px 0", background: "#991B1B", color: "#fff", border: "none", borderRadius: 10, fontFamily: T.sans, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+                            Skip anyway
+                          </button>
+                          <button onClick={() => setSkipConfirm(null)}
+                            style={{ flex: 1, padding: "10px 0", background: "#fff", color: "#991B1B", border: "1px solid #FECACA", borderRadius: 10, fontFamily: T.sans, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+                            I'll do it
+                          </button>
+                        </div>
                       </div>
                     )}
-                    {allTasks.map((t, ti) => {
-                  const tColors = tagColors[t.tag] || tagColors["Read"];
-                  return (
-                    <div key={ti} className="sa-dash-task-card" style={{ background: "#fff", border: `1px solid ${status === 'done' ? "#E6E4EE" : status === 'skipped' ? T.border : "#E6E4EE"}`, borderRadius: 20, padding: "clamp(18px,4vw,28px) clamp(16px,3vw,24px)", marginBottom: 16, boxShadow: "0 2px 12px rgba(26,23,48,0.05)" }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
-                        <span style={{ fontFamily: T.sans, fontSize: 13, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", padding: "5px 12px", background: tColors.bg, color: tColors.text, border: `1.5px solid ${tColors.border}`, borderRadius: 6 }}>{t.tag}</span>
-                        <span style={{ fontFamily: T.sans, fontSize: 15, color: T.body }}>{t.time}</span>
-                        {ti === 0 && !status && <span style={{ marginLeft: "auto", fontFamily: T.sans, fontSize: 15, fontWeight: 700, color: T.brand, letterSpacing: 0.3 }}>Day {dayNum}{allTasks.length > 1 ? ` · ${allTasks.length} tasks` : ""}</span>}
-                        {ti > 0 && !status && <span style={{ marginLeft: "auto", fontFamily: T.sans, fontSize: 13, fontWeight: 600, color: T.muted, letterSpacing: 0.3 }}>Task {ti + 1} of {allTasks.length}</span>}
-                        {ti === 0 && status === 'done' && <span style={{ marginLeft: "auto", fontFamily: T.sans, fontSize: 13, fontWeight: 600, color: T.brandD, background: T.brandL, padding: "4px 12px", borderRadius: 20 }}>Done ✓</span>}
-                        {ti === 0 && status === 'skipped' && <span style={{ marginLeft: "auto", fontFamily: T.sans, fontSize: 13, color: T.muted, background: T.bg, padding: "4px 12px", borderRadius: 20 }}>Skipped</span>}
-                      </div>
-                      <h3 style={{ fontFamily: T.sans, fontSize: 19, fontWeight: 700, color: T.ink, margin: "0 0 14px", lineHeight: 1.3 }}>{t.title}</h3>
-                      <p style={{ fontFamily: T.sans, fontSize: 16, color: T.ink, margin: "0 0 18px", lineHeight: 1.85 }}>{t.desc}</p>
-                      <TaskSteps steps={t.steps} initialChecked={(checkedSteps[`${dayNum}_${ti}`] || checkedSteps[dayNum] || {})} onCheckedChange={c => setCheckedSteps(prev => ({ ...prev, [`${dayNum}_${ti}`]: c }))} tagBg={tColors.bg} tagAccent={tColors.text} />
-                      {(t.whyBase || t.why) && (
-                        <div style={{ borderLeft: `3px solid ${tColors.border || T.border}`, paddingLeft: 14 }}>
-                          <p style={{ fontFamily: T.sans, fontSize: 15, color: T.body, margin: 0, lineHeight: 1.75 }}>
-                            <strong style={{ color: T.ink, fontSize: 15 }}>{whyLabel2} </strong>{t.whyBase || t.why}
-                          </p>
+
+                    {/* ── END DAY BUTTON — shows "Goal reached" or "Finish day early" ── */}
+                    {!status && Object.keys(taskDoneAck).some(k => k.startsWith(`${dayNum}_`) && taskDoneAck[k]) && (() => {
+                      const q = dailyQueue[dayNum] || [];
+                      const pM = (s) => { const m = String(s||"").match(/(\d+)/); return m ? parseInt(m[1]) : 5; };
+                      const minutesDone = q.reduce((sum, t, ti) => taskDoneAck[`${dayNum}_${ti}`] ? sum + pM(t.time) : sum, 0);
+                      const goalHit = minutesDone >= 15;
+                      return (
+                        <div style={{ marginTop: 4, marginBottom: 4 }}>
+                          <button onClick={() => markDay(dayNum, 'done')}
+                            style={{
+                              width: "100%", padding: goalHit ? "16px 0" : "13px 0",
+                              background: goalHit ? "linear-gradient(135deg, #7BAF7E 0%, #5E9462 100%)" : "none",
+                              color: goalHit ? "#fff" : T.body,
+                              border: goalHit ? "none" : `1.5px solid ${T.border}`,
+                              borderRadius: 50, fontFamily: T.sans, fontSize: goalHit ? 16 : 14, fontWeight: goalHit ? 700 : 500,
+                              cursor: "pointer", transition: "all 0.3s",
+                              boxShadow: goalHit ? "0 3px 16px rgba(123,175,126,0.35)" : "none",
+                              animation: goalHit ? "basePulse 2s ease-in-out infinite" : "none",
+                            }}
+                            onMouseEnter={e => { if (goalHit) { e.currentTarget.style.transform = "translateY(-1px) scale(1.01)"; } else { e.currentTarget.style.borderColor = T.brandMid; e.currentTarget.style.color = T.ink; } }}
+                            onMouseLeave={e => { if (goalHit) { e.currentTarget.style.transform = "scale(1)"; } else { e.currentTarget.style.borderColor = T.border; e.currentTarget.style.color = T.body; } }}>
+                            {goalHit ? "✓ Goal reached — End day" : "Finish day early"}
+                          </button>
+                          {goalHit && <p style={{ fontFamily: T.sans, fontSize: 13, color: T.muted, textAlign: "center", margin: "8px 0 0" }}>or keep going for bonus Sparks ✦</p>}
                         </div>
-                      )}
-                      {ti === allTasks.length - 1 && (
-                        <DayNoteField dayNum={dayNum} dayNotes={dayNotes} setDayNotes={setDayNotes} />
-                      )}
-                    </div>
-                  );
-                })}
-                  </>
+                      );
+                    })()}
+                    <style>{`@keyframes basePulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(123,175,126,0); } 50% { box-shadow: 0 0 0 4px rgba(123,175,126,0.15); } }`}</style>
+                  </div>
                 );
               })()}
-
-              {/* ── COMPLETION ── */}
-              {!status && !showCelebration[dayNum] && (
-                <div style={{ background: "#fff", borderRadius: 20, padding: "22px 24px", border: `1.5px solid ${C.border}` }}>
-                  <p style={{ fontFamily: T.sans, fontSize: 20, fontWeight: 600, color: T.ink, margin: "0 0 18px" }}>Did you complete today's task?</p>
-                  <div style={{ display: "flex", gap: 10 }}>
-                    <button onClick={() => markDay(dayNum, 'done')}
-                      style={{ flex: 1, background: T.brandD, color: "#fff", border: "none", borderRadius: 50, padding: "15px 0", fontFamily: T.sans, fontSize: 16, fontWeight: 600, cursor: "pointer", letterSpacing: -0.2, transition: "transform 0.12s", boxShadow: "0 2px 10px rgba(232,168,32,0.25)" }}
-                      onMouseEnter={e => e.currentTarget.style.transform = "translateY(-1px) scale(1.01)"}
-                      onMouseLeave={e => e.currentTarget.style.transform = "translateY(0) scale(1)"}>
-                      Yes, done
-                    </button>
-                    <button onClick={() => markDay(dayNum, 'skipped')}
-                      style={{ flex: 0.5, background: C.offWhite, color: T.body, border: `1px solid rgba(30,30,42,0.18)`, borderRadius: 50, padding: "15px 0", fontFamily: T.sans, fontSize: 14, cursor: "pointer", transition: "background 0.12s" }}
-                      onMouseEnter={e => e.currentTarget.style.background = "#F0EFF8"}
-                      onMouseLeave={e => e.currentTarget.style.background = C.offWhite}>
-                      Not today
-                    </button>
-                  </div>
-                </div>
-              )}
 
               {/* ── COMPLETED STATE ── */}
               {status === 'done' && dayNum < TOTAL_DAYS && (
@@ -6283,7 +7694,10 @@ ${timeHint}`;
                     {streakCount === 14 && <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", color: T.brand, margin: "0 0 6px" }}>Two weeks · Most people quit by now. Not you.</p>}
                     {streakCount === 21 && <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", color: T.brand, margin: "0 0 6px" }}>21 days · Okay, this is officially a habit now.</p>}
                     {streakCount === 30 && <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", color: T.brand, margin: "0 0 6px" }}>30 days · You absolute legend.</p>}
-                    <p style={{ fontFamily: T.sans, fontSize: 18, color: T.ink, margin: "0 0 4px", fontWeight: 700 }}>Day {dayNum}, crushed it.{streakCount > 1 ? ` 🔥 ${streakCount}` : ""}</p>
+                    <p style={{ fontFamily: T.sans, fontSize: 18, color: T.ink, margin: "0 0 4px", fontWeight: 700 }}>
+                      Day {dayNum}, crushed it.{streakCount > 1 ? ` 🔥 ${streakCount}` : ""}
+                      {celebrationModal?.tasksCompleted > 1 && <span style={{ fontFamily: T.sans, fontSize: 14, fontWeight: 500, color: T.body, marginLeft: 6 }}>· {celebrationModal.tasksCompleted} tasks done</span>}
+                    </p>
                     {goalUpdatedDay === dayNum && (
                       <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: 1.2, textTransform: "uppercase", color: T.brand, margin: "0 0 6px" }}>Goal updated, tasks reshaped ✓</p>
                     )}
@@ -6313,6 +7727,35 @@ ${timeHint}`;
                       </div>
                     )}
                   </div>
+
+                  {/* What you did — past day task list */}
+                  {dailyQueue[dayNum] && dailyQueue[dayNum].length > 0 && (() => {
+                    const completedQ = dailyQueue[dayNum].filter((qt, qi) => {
+                      const qChecked = checkedSteps[`${dayNum}_${qi}`] || {};
+                      return (qt.steps || []).length === 0 || (qt.steps || []).every((_, si) => qChecked[si]);
+                    });
+                    if (completedQ.length === 0) return null;
+                    return (
+                    <div style={{ background: "#fff", border: `1px solid ${T.border}`, borderRadius: 20, padding: "18px 20px", marginBottom: 0 }}>
+                      <p style={{ fontFamily: T.sans, fontSize: 12, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", color: T.muted, margin: "0 0 12px" }}>What you did</p>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                        {completedQ.map((qt, qi) => {
+                          const qColors = tagColors[qt.tag] || tagColors["Read"];
+                          return (
+                            <div key={qi} style={{ background: "#FFFDF7", border: `1px solid ${T.border}`, borderRadius: 12, padding: "10px 14px" }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                                <span style={{ fontSize: 14, flexShrink: 0 }}>✅</span>
+                                <span style={{ fontFamily: T.sans, fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.6, padding: "2px 8px", background: qColors.bg, color: qColors.text, border: `1px solid ${qColors.border}`, borderRadius: 4, flexShrink: 0 }}>{qt.tag || "Task"}</span>
+                                <span style={{ fontFamily: T.sans, fontSize: 13, fontWeight: 600, color: T.ink, flex: 1, lineHeight: 1.3 }}>{qt.title}</span>
+                                {qt.time && <span style={{ fontFamily: T.sans, fontSize: 11, color: T.muted, flexShrink: 0 }}>{qt.time}</span>}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                    );
+                  })()}
 
                   {/* Up next */}
                   {dayNum < TOTAL_DAYS && (
@@ -6438,7 +7881,7 @@ ${timeHint}`;
                         <p style={{ fontFamily: T.sans, fontSize: 16, color: isDone ? T.brandD : T.black, margin: "0 0 4px", fontWeight: 600, fontStyle: "italic" }}>{nextWkTheme}</p>
                         <p style={{ fontFamily: T.sans, fontSize: 13, color: T.muted, margin: 0, lineHeight: 1.5 }}>
                           {isDone
-                            ? wkNum === 1 ? "Be Brilliant adapts what's next based on how this week went."
+                            ? wkNum === 1 ? "BeBrilliant adapts what's next based on how this week went."
                             : "Each week's focus is shaped by what you've built so far."
                             : `This week's tasks are ready when you are.`
                           }
@@ -6501,7 +7944,7 @@ ${timeHint}`;
         else if (week2Drift) nudge = {
           headline: "Week 2. The graveyard of good intentions.",
           body: "Most programs die right here. Yours doesn't have to. A 2-minute check-in might be all you need.",
-          cta: "Check in with Be Brilliant →",
+          cta: "Check in with BeBrilliant →",
         };
         else if (streakAtRisk) nudge = {
           headline: `${streakCount}-day streak on the line 🔥`,
@@ -6626,6 +8069,9 @@ ${timeHint}`;
         </div>
       )}
 
+      {/* ── HOW IT WORKS POPUP — shown once per session start ── */}
+      {showHowItWorks && <HowItWorksPopup onDismiss={() => setShowHowItWorks(false)} />}
+
       {/* ── GOAL MAP MODAL ── */}
       {arcOpen && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(45,42,62,0.45)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: "12px 8px" }}
@@ -6642,24 +8088,40 @@ ${timeHint}`;
               {/* Content, padded independently so goal text always has space */}
               <div style={{ padding: "20px 22px 28px", display: "flex", alignItems: "flex-start", justifyContent: "space-between", position: "relative", zIndex: 1 }}>
                 <div style={{ flex: 1, minWidth: 0, paddingRight: 8 }}>
-                  <p style={{ fontFamily: T.sans, fontSize: 20, fontWeight: 700, color: "#D49518", margin: "0 0 12px", lineHeight: 1.2 }}>Goal map</p>
+                  <p style={{ fontFamily: T.sans, fontSize: 12, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", color: "#D49518", margin: "0 0 12px" }}>Your journey</p>
                   {(() => {
                     const rawGoalText = plan._answers?.goal_custom || GOAL_TEXTS[plan._answers?.goal];
                     const displayGoal = (brilChangeMade && goalStatement) ? goalStatement : rawGoalText;
-                    return displayGoal ? (
-                      <div style={{ borderRadius: 10, padding: "10px 14px", border: `1px solid ${T.border}`, display: "flex", alignItems: "flex-start", gap: 10 }}>
-                        <p style={{ fontFamily: T.serif, fontSize: 17, color: T.ink, margin: 0, lineHeight: 1.55, wordBreak: "break-word", fontStyle: "italic", fontWeight: 400, flex: 1 }}>{displayGoal}</p>
-                        <button onClick={() => { setArcOpen(false); setShowGoalEdit(true); }} style={{
-                          background: "none", border: `1px solid ${T.border}`, borderRadius: 6,
-                          width: 28, height: 28, display: "flex", alignItems: "center", justifyContent: "center",
-                          cursor: "pointer", flexShrink: 0, marginTop: 2, transition: "border-color 0.15s",
-                        }}
-                        onMouseEnter={e => e.currentTarget.style.borderColor = T.brand}
-                        onMouseLeave={e => e.currentTarget.style.borderColor = T.border}>
-                          <svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M11.5 1.5L14.5 4.5L5 14H2V11L11.5 1.5Z" stroke={T.muted} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                        </button>
-                      </div>
-                    ) : null;
+                    const daysLeft = goalDeadline ? Math.max(0, Math.ceil((new Date(goalDeadline) - new Date()) / 86400000)) : null;
+                    return (
+                      <>
+                        {displayGoal && (
+                          <div style={{ borderRadius: 10, padding: "10px 14px", border: `1px solid ${T.border}`, display: "flex", alignItems: "flex-start", gap: 10, background: "rgba(255,255,255,0.6)" }}>
+                            <p style={{ fontFamily: T.serif, fontSize: 17, color: T.ink, margin: 0, lineHeight: 1.55, wordBreak: "break-word", fontStyle: "italic", fontWeight: 400, flex: 1 }}>{displayGoal}</p>
+                            <button onClick={() => { setArcOpen(false); setShowGoalEdit(true); }} style={{
+                              background: "none", border: `1px solid ${T.border}`, borderRadius: 6,
+                              width: 28, height: 28, display: "flex", alignItems: "center", justifyContent: "center",
+                              cursor: "pointer", flexShrink: 0, marginTop: 2, transition: "border-color 0.15s",
+                            }}
+                            onMouseEnter={e => e.currentTarget.style.borderColor = T.brand}
+                            onMouseLeave={e => e.currentTarget.style.borderColor = T.border}>
+                              <svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M11.5 1.5L14.5 4.5L5 14H2V11L11.5 1.5Z" stroke={T.muted} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                            </button>
+                          </div>
+                        )}
+                        {/* Progress + deadline pills */}
+                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
+                          <span style={{ fontFamily: T.sans, fontSize: 12, fontWeight: 600, color: "#5E9462", background: "rgba(123,175,126,0.12)", padding: "4px 10px", borderRadius: 6 }}>
+                            {doneCount} day{doneCount !== 1 ? "s" : ""} done · Week {currentWeek}
+                          </span>
+                          {daysLeft !== null && (
+                            <span style={{ fontFamily: T.sans, fontSize: 12, fontWeight: 600, color: daysLeft <= 14 ? "#DC2626" : "#92400E", background: daysLeft <= 14 ? "#FEE2E2" : "rgba(232,168,32,0.1)", padding: "4px 10px", borderRadius: 6 }}>
+                              {daysLeft === 0 ? "Deadline today" : `${daysLeft}d to deadline`}
+                            </span>
+                          )}
+                        </div>
+                      </>
+                    );
                   })()}
                 </div>
                 <button onClick={() => setArcOpen(false)} style={{ background: "rgba(30,30,42,0.06)", border: `1px solid ${C.border}`, borderRadius: "50%", width: 30, height: 30, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, color: T.muted, cursor: "pointer", flexShrink: 0, marginTop: 2 }}>✕</button>
@@ -6755,13 +8217,21 @@ ${timeHint}`;
                           />
                         </svg>
                       )}
+
+                      {/* Milestone banner after week 4 */}
+                      {w === 4 && arc.mid && (
+                        <div style={{ margin: "8px 0 12px", padding: "12px 16px", background: "linear-gradient(135deg, rgba(232,168,32,0.06) 0%, rgba(232,168,32,0.02) 100%)", border: `1px solid ${T.brandMid}40`, borderRadius: 12, textAlign: "center" }}>
+                          <p style={{ fontFamily: T.sans, fontSize: 10, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", color: T.brandD, margin: "0 0 4px" }}>Midpoint check</p>
+                          <p style={{ fontFamily: T.sans, fontSize: 14, color: T.ink, margin: 0, lineHeight: 1.5, fontWeight: 500 }}>{arc.mid}</p>
+                        </div>
+                      )}
                     </div>
                   );
                 });
               })()}
 
-              {/* Tree destination, goal */}
-              <div style={{ textAlign: "center", marginTop: 20, paddingBottom: 16 }}>
+              {/* Tree destination */}
+              <div style={{ textAlign: "center", marginTop: 32, paddingBottom: 8 }}>
                 <div style={{ width: 88, height: 88, borderRadius: "50%", background: "#fff", border: "3px solid #34D072", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 12px", boxShadow: "0 4px 24px rgba(45,156,95,0.35), 0 0 0 6px rgba(52,208,114,0.10)" }}>
                   <svg width="56" height="56" viewBox="0 0 56 56" fill="none" xmlns="http://www.w3.org/2000/svg">
                     <defs>
@@ -6789,7 +8259,7 @@ ${timeHint}`;
                     <path d="M44 22 Q47 18 48 15" stroke="#7A5230" strokeWidth="1.3" strokeLinecap="round" fill="none" />
                     <path d="M18 17 Q14 14 13 10" stroke="#7A5230" strokeWidth="1.2" strokeLinecap="round" fill="none" />
                     <path d="M38 17 Q42 14 43 10" stroke="#7A5230" strokeWidth="1.2" strokeLinecap="round" fill="none" />
-                    {/* Canopy, deep to bright, layered for lush feel */}
+                    {/* Canopy */}
                     <ellipse cx="28" cy="17" rx="22" ry="14" fill="#14733A" />
                     <ellipse cx="14" cy="18" rx="10" ry="8" fill="#18843F" />
                     <ellipse cx="42" cy="18" rx="10" ry="8" fill="#18843F" />
@@ -6801,9 +8271,7 @@ ${timeHint}`;
                     <ellipse cx="32" cy="9" rx="10" ry="7" fill="#35D06A" />
                     <ellipse cx="28" cy="7" rx="9" ry="6" fill="#42E278" />
                     <ellipse cx="28" cy="5" rx="6" ry="4.5" fill="#58F08E" />
-                    {/* Bright crown tip */}
                     <ellipse cx="27" cy="4" rx="3.5" ry="2.5" fill="#78F5A8" />
-                    {/* Light dappling */}
                     <ellipse cx="22" cy="8" rx="4" ry="2" fill="rgba(255,255,255,0.2)" transform="rotate(-15 22 8)" />
                     <ellipse cx="34" cy="6" rx="3" ry="1.5" fill="rgba(255,255,255,0.15)" transform="rotate(10 34 6)" />
                     <ellipse cx="16" cy="15" rx="3" ry="1.5" fill="rgba(255,255,255,0.12)" />
@@ -6811,12 +8279,18 @@ ${timeHint}`;
                     <ellipse cx="28" cy="12" rx="5" ry="2" fill="rgba(255,255,255,0.08)" transform="rotate(-5 28 12)" />
                   </svg>
                 </div>
-                <div style={{ border: `1px solid ${T.border}`, borderRadius: 12, padding: "12px 18px", maxWidth: 280, marginLeft: "auto", marginRight: "auto" }}>
-                  <p style={{ fontFamily: T.sans, fontSize: 17, color: T.ink, margin: 0, lineHeight: 1.55, fontWeight: 500 }}>
-                    {(() => { const g = plan._answers?.goal_custom || GOAL_TEXTS[plan._answers?.goal]; return (brilChangeMade && goalStatement) ? goalStatement : g; })()}
-                  </p>
-                </div>
+                <p style={{ fontFamily: T.sans, fontSize: 14, fontWeight: 600, color: "#5E9462", margin: "0 0 16px", letterSpacing: -0.1 }}>
+                  Your goal ✦
+                </p>
               </div>
+
+              {/* Destination — below tree */}
+              {arc.end && (
+                <div style={{ margin: "0 0 24px", padding: "14px 18px", background: "linear-gradient(135deg, rgba(59,122,86,0.08) 0%, rgba(59,122,86,0.02) 100%)", border: `1px solid rgba(59,122,86,0.2)`, borderRadius: 12, textAlign: "center" }}>
+                  <p style={{ fontFamily: T.sans, fontSize: 10, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", color: "#3B7A56", margin: "0 0 4px" }}>Destination</p>
+                  <p style={{ fontFamily: T.sans, fontSize: 14, color: T.ink, margin: 0, lineHeight: 1.5, fontWeight: 500 }}>{arc.end}</p>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -6846,171 +8320,116 @@ ${timeHint}`;
 
             <div style={{ flex: 1, overflowY: "auto", padding: "20px 20px 32px" }}>
               {(() => {
-                const totalDone = Object.values(dayStatus).filter(s => s === 'done').length;
-                const totalSkipped = Object.values(dayStatus).filter(s => s === 'skipped').length;
-                const completionRate = (totalDone + totalSkipped) > 0 ? Math.round((totalDone / (totalDone + totalSkipped)) * 100) : 0;
+                const completionRate = (doneCount + totalSkipped) > 0 ? Math.round((doneCount / (doneCount + totalSkipped)) * 100) : 0;
                 return (
-                  <>
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 10, marginBottom: 24 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 8, marginBottom: 24 }}>
                     {[
-                      { val: totalDone, label: "days done" },
-                      { val: streakCount, label: "day streak" },
-                      { val: completionRate + "%", label: "completion" },
+                      { val: doneCount, label: "days done" },
+                      { val: streakCount, label: "streak" },
+                      { val: completionRate + "%", label: "rate" },
+                      { val: cashPot, label: "Sparks", icon: true },
                     ].map((s, i) => (
-                      <div key={i} style={{ background: T.bg, borderRadius: 12, padding: "14px 12px", textAlign: "center", border: `1px solid ${T.border}` }}>
-                        <p style={{ fontFamily: T.sans, fontSize: 24, fontWeight: 800, color: T.ink, margin: "0 0 2px", letterSpacing: -0.5 }}>{s.val}</p>
-                        <p style={{ fontFamily: T.sans, fontSize: 13, color: T.body, margin: 0, textTransform: "uppercase", letterSpacing: 0.8 }}>{s.label}</p>
+                      <div key={i} style={{ background: s.icon ? "#FFFDF7" : T.bg, borderRadius: 12, padding: "14px 8px", textAlign: "center", border: `1px solid ${s.icon ? "rgba(200,150,30,0.2)" : T.border}` }}>
+                        <p style={{ fontFamily: T.sans, fontSize: 22, fontWeight: 800, color: s.icon ? "#6B4F0A" : T.ink, margin: "0 0 2px", letterSpacing: -0.5 }}>{s.val}</p>
+                        <p style={{ fontFamily: T.sans, fontSize: 11, color: s.icon ? "#8B6914" : T.body, margin: 0, textTransform: "uppercase", letterSpacing: 0.6, fontWeight: s.icon ? 700 : 400 }}>{s.label}</p>
                       </div>
                     ))}
                   </div>
-                  {/* Creds highlight in progress modal */}
-                  <div style={{ background: "#fff", borderRadius: 14, padding: "18px 20px", border: "1.5px solid rgba(200,150,30,0.2)", boxShadow: "0 1px 6px rgba(180,130,20,0.07)", marginBottom: 24, display: "flex", alignItems: "center", gap: 16 }}>
-                    <div style={{ width: 48, height: 48, borderRadius: 13, background: "#FBF5E6", border: "1.5px solid rgba(200,150,30,0.25)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                      <svg width="26" height="26" viewBox="0 0 24 24" fill="none">
-                        <path d="M12 2C12.6 8 16 11.4 22 12C16 12.6 12.6 16 12 22C11.4 16 8 12.6 2 12C8 11.4 11.4 8 12 2Z" fill="#E8A820"/>
-                        <circle cx="19" cy="5" r="1.5" fill="#F0C050" opacity="0.75"/>
-                      </svg>
-                    </div>
-                    <div>
-                      <p style={{ fontFamily: T.sans, fontSize: 12, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "#8B6914", margin: "0 0 4px" }}>Sparks</p>
-                      <p style={{ fontFamily: T.sans, fontSize: 32, fontWeight: 800, color: "#6B4F0A", margin: 0, lineHeight: 1 }}>{cashPot}</p>
-                      <p style={{ fontFamily: T.sans, fontSize: 14, color: "#4A3810", margin: "5px 0 0", lineHeight: 1.55 }}>Every day you show up, you earn a spark. They add up faster than you think.</p>
-                    </div>
-                  </div>
-                  </>
                 );
               })()}
 
-              {/* ── MOVEMENT OVER TIME, BUCKETS ── */}
+              {/* ── DAILY HEAT MAP — GitHub-style contribution grid ── */}
               {(() => {
-                const doneDaysTotal = Object.values(dayStatus).filter(s => s === 'done').length;
-                if (doneDaysTotal < 2) return null;
-
-                const TAGS = ['Apply', 'Read', 'Reflect', 'Tool'];
-                const TAG_COLORS   = { Apply: "#9A3D20", Read: "#3355AA", Reflect: "#6B3880", Tool: "#2A6B45" };
-                const TAG_FILLS    = { Apply: "#FFE4D4", Read: "#E8F0FF", Reflect: "#F4EDF8", Tool: "#E6F5EE" };
-                const TAG_LABELS   = { Apply: "Apply", Read: "Read", Reflect: "Reflect", Tool: "Tool" };
-
-                const counts = { Apply: 0, Read: 0, Reflect: 0, Tool: 0 };
-                Object.entries(dayTasks).forEach(([d, t]) => {
-                  if (dayStatus[d] === 'done' && t?.tag && counts[t.tag] !== undefined) counts[t.tag]++;
-                });
-                const maxCount = Math.max(1, ...Object.values(counts));
-
+                const totalActed = Object.keys(dayStatus).length;
+                if (totalActed < 1) return null;
+                // Build rows of 7 (weeks), columns are days
+                const numWeeks = Math.ceil(Math.max(highestUnlocked, 7) / 7);
+                const dayLabelsShort = ["M","T","W","T","F","S","S"];
+                const START_DOW_H = startDate ? new Date(startDate).getDay() : 1;
                 return (
                   <div style={{ marginBottom: 24 }}>
-                    <p style={{ fontFamily: T.sans, fontSize: 12, fontWeight: 700, letterSpacing: 1.2, textTransform: "uppercase", color: T.body, margin: "0 0 12px" }}>Where you've been building</p>
-                    <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
-                      {TAGS.map(tag => {
-                        const n = counts[tag];
-                        const pct = n / maxCount; // 0–1
-                        const hasData = n > 0;
-                        const color = TAG_COLORS[tag];
-                        const BUCKET_H = 64; // compact height
-                        const fillH = Math.max(hasData ? 8 : 0, Math.round(pct * BUCKET_H));
-                        return (
-                          <div key={tag} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 5 }}>
-                            {/* Count above bucket */}
-                            <span style={{
-                              fontFamily: T.sans, fontSize: 13, fontWeight: 600,
-                              color: hasData ? color : T.border,
-                              minHeight: 16, display: "block",
-                              opacity: hasData ? 0.85 : 1,
-                            }}>{n > 0 ? n : ""}</span>
-
-                            {/* Bucket shell */}
-                            <div style={{
-                              width: "100%",
-                              height: BUCKET_H,
-                              borderRadius: "4px 4px 6px 6px",
-                              border: `1px solid ${hasData ? color + "33" : T.border}`,
-                              background: T.bg,
-                              position: "relative",
-                              overflow: "hidden",
-                            }}>
-                              {/* Liquid fill */}
-                              {hasData && (
-                                <div style={{
-                                  position: "absolute",
-                                  bottom: 0, left: 0, right: 0,
-                                  height: fillH,
-                                  background: `${color}66`,
-                                  borderRadius: "2px 2px 5px 5px",
-                                  transition: "height 0.6s cubic-bezier(0.34,1.56,0.64,1)",
-                                }}>
-                                  {/* Shine band */}
-                                  <div style={{
-                                    position: "absolute", top: 0, left: "12%", right: "12%",
-                                    height: 2, background: "rgba(255,255,255,0.4)",
-                                    borderRadius: 1,
-                                  }} />
-                                </div>
-                              )}
-                            </div>
-
-                            {/* Tag label */}
-                            <span style={{
-                              fontFamily: T.sans, fontSize: 12, fontWeight: 600,
-                              color: hasData ? color : T.muted,
-                              textTransform: "uppercase", letterSpacing: 0.5,
-                              textAlign: "center", opacity: hasData ? 0.8 : 0.45,
-                            }}>{TAG_LABELS[tag]}</span>
+                    <p style={{ fontFamily: T.sans, fontSize: 12, fontWeight: 700, letterSpacing: 1.2, textTransform: "uppercase", color: T.body, margin: "0 0 12px" }}>Every day</p>
+                    <div style={{ display: "flex", gap: 3, overflowX: "auto", paddingBottom: 4 }}>
+                      {/* Day labels column */}
+                      <div style={{ display: "flex", flexDirection: "column", gap: 3, paddingTop: 0, marginRight: 2 }}>
+                        {dayLabelsShort.map((l, i) => (
+                          <div key={i} style={{ width: 14, height: 14, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                            <span style={{ fontFamily: T.sans, fontSize: 8, color: T.muted, fontWeight: 600 }}>{i % 2 === 0 ? l : ""}</span>
                           </div>
-                        );
-                      })}
+                        ))}
+                      </div>
+                      {/* Week columns */}
+                      {Array.from({ length: numWeeks }, (_, wi) => (
+                        <div key={wi} style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                          {Array.from({ length: 7 }, (_, di) => {
+                            const dayNum = wi * 7 + di + 1;
+                            const s = dayStatus[dayNum];
+                            const isToday = dayNum === highestUnlocked;
+                            const isFuture = dayNum > highestUnlocked;
+                            const bg = s === 'done' ? "#3B7A56" : s === 'skipped' ? "#E8A080" : isToday ? T.brandMid + "60" : isFuture ? "rgba(30,30,42,0.03)" : "rgba(30,30,42,0.06)";
+                            const border = isToday ? `1.5px solid ${T.brand}` : "1px solid rgba(30,30,42,0.06)";
+                            return (
+                              <div key={di} style={{
+                                width: 14, height: 14, borderRadius: 3,
+                                background: bg, border,
+                                transition: "background 0.2s",
+                              }} title={`Day ${dayNum}${s ? ` — ${s}` : isFuture ? "" : " — pending"}`} />
+                            );
+                          })}
+                        </div>
+                      ))}
+                    </div>
+                    <div style={{ display: "flex", gap: 12, marginTop: 10, alignItems: "center" }}>
+                      {[
+                        { color: "#3B7A56", label: "Done" },
+                        { color: "#E8A080", label: "Skipped" },
+                        { color: "rgba(30,30,42,0.06)", label: "Pending" },
+                      ].map(({ color, label }) => (
+                        <div key={label} style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                          <div style={{ width: 10, height: 10, borderRadius: 2, background: color }} />
+                          <span style={{ fontFamily: T.sans, fontSize: 11, color: T.muted }}>{label}</span>
+                        </div>
+                      ))}
                     </div>
                   </div>
                 );
               })()}
-
-              {/* ── WEEKLY BARS ── */}
-              <div style={{ marginBottom: 24 }}>
-                <p style={{ fontFamily: T.sans, fontSize: 12, fontWeight: 700, letterSpacing: 1.2, textTransform: "uppercase", color: T.body, margin: "0 0 12px" }}>Weekly completion</p>
-                <div style={{ display: "flex", gap: 6, alignItems: "flex-end", height: 64 }}>
-                  {Array.from({ length: Math.min(currentWeek, TOTAL_WEEKS) }, (_, i) => {
-                    const wk = i + 1;
-                    const wkStart = i * 7 + 1;
-                    const done = Array.from({length:7},(_,j)=>wkStart+j).filter(d=>dayStatus[d]==='done').length;
-                    const isCurr = wk === currentWeek;
-                    const isFut = wk > currentWeek;
-                    const pct = isFut ? 0 : (done / 7);
-                    return (
-                      <div key={wk} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
-                        <div style={{ width: "100%", height: 48, background: T.bg, borderRadius: 6, overflow: "hidden", display: "flex", alignItems: "flex-end", border: isCurr ? `1.5px solid ${T.brandMid}` : "1px solid transparent" }}>
-                          <div style={{ width: "100%", height: `${Math.max(pct * 100, isFut ? 0 : 4)}%`, background: isCurr ? T.brand : isFut ? "transparent" : (done >= 5 ? T.brandD : done >= 3 ? T.brand : T.brandMid), borderRadius: "4px 4px 0 0", transition: "height 0.4s ease", opacity: isFut ? 0.2 : 1 }} />
-                        </div>
-                        <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
-                          <span style={{ fontFamily: T.sans, fontSize: 11, color: isCurr ? T.brand : T.body, fontWeight: isCurr ? 700 : 400 }}>W{wk}</span>
-                          {weeklyCheckInDone[wk] && <span style={{ fontSize: 8, color: T.brand }}>✓</span>}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
 
               {/* ── ACHIEVEMENTS ── */}
               {(() => {
-                const ctx = { dayStatus, dayTasks, streakCount, brilChangeMade, brilPickDay };
+                const ctx = { dayStatus, dayTasks, streakCount, brilChangeMade, brilPickDay, comebackCompleted, streakFreezeUsed };
                 return (
                   <div style={{ marginBottom: 24 }}>
                     <p style={{ fontFamily: T.sans, fontSize: 12, fontWeight: 700, letterSpacing: 1.2, textTransform: "uppercase", color: T.body, margin: "0 0 12px" }}>Achievements</p>
                     <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 8 }}>
                       {ACHIEVEMENTS.map(a => {
                         const isEarned = a.earned(ctx);
+                        const prog = !isEarned && a.progress ? a.progress(ctx) : null;
+                        const progPct = prog ? Math.round((prog.current / prog.target) * 100) : 0;
                         return (
                           <div key={a.id} style={{
-                            display: "flex", alignItems: "center", gap: 10,
+                            display: "flex", alignItems: "flex-start", gap: 10,
                             padding: "14px 14px", borderRadius: 12,
                             background: isEarned ? T.lavL : T.bg,
                             border: `1px solid ${isEarned ? T.lav : T.border}`,
                             opacity: isEarned ? 1 : 0.65,
                             transition: "opacity 0.2s",
                           }}>
-                            <span style={{ fontSize: 22, flexShrink: 0, filter: isEarned ? "none" : "grayscale(1)" }}>{a.icon}</span>
+                            <span style={{ fontSize: 22, flexShrink: 0, filter: isEarned ? "none" : "grayscale(1)", marginTop: 2 }}>{a.icon}</span>
                             <div style={{ flex: 1, minWidth: 0 }}>
                               <p style={{ fontFamily: T.sans, fontSize: 14, fontWeight: 700, color: isEarned ? T.lavD : T.ink, margin: "0 0 2px" }}>{a.name}</p>
                               <p style={{ fontFamily: T.sans, fontSize: 13, color: isEarned ? "#5A4580" : T.muted, margin: 0, lineHeight: 1.45 }}>{a.desc}</p>
+                              {/* Progress bar for unearned achievements with measurable progress */}
+                              {prog && prog.current > 0 && (
+                                <div style={{ marginTop: 8 }}>
+                                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                    <div style={{ flex: 1, height: 4, background: T.border, borderRadius: 2, overflow: "hidden" }}>
+                                      <div style={{ height: "100%", borderRadius: 2, background: progPct >= 75 ? T.sageD : T.brandMid, width: `${progPct}%`, transition: "width 0.4s ease" }} />
+                                    </div>
+                                    <span style={{ fontFamily: T.sans, fontSize: 11, color: T.muted, fontWeight: 600, whiteSpace: "nowrap" }}>{prog.current}/{prog.target}</span>
+                                  </div>
+                                </div>
+                              )}
                             </div>
                           </div>
                         );
@@ -7163,9 +8582,19 @@ ${timeHint}`;
       )}
       {/* ── WEEK GENERATING BANNER ── */}
       {weekGenerating && !weeklyCheckInOpen && !isInitialWeekLoad && (
-        <div style={{ position: "fixed", bottom: 24, left: "50%", transform: "translateX(-50%)", background: T.brand, color: "#fff", fontFamily: T.sans, fontSize: 14, padding: "12px 20px", borderRadius: 10, zIndex: 99, boxShadow: "0 4px 20px rgba(0,0,0,0.2)", display: "flex", alignItems: "center", gap: 10 }}>
-          <div style={{ width: 14, height: 14, borderRadius: "50%", border: "2px solid rgba(255,255,255,0.3)", borderTop: "2px solid #fff", animation: "spin 0.8s linear infinite", flexShrink: 0 }} />
-          Building your upcoming days...
+        <div style={{ position: "fixed", bottom: 24, left: "50%", transform: "translateX(-50%)", background: "#fff", color: T.ink, fontFamily: T.sans, fontSize: 14, fontWeight: 600, padding: "14px 24px", borderRadius: 50, zIndex: 99, boxShadow: "0 4px 24px rgba(0,0,0,0.10)", border: `1.5px solid ${T.brandMid}`, display: "flex", alignItems: "center", gap: 12 }}>
+          <div style={{
+            width: 28, height: 28, borderRadius: "50%",
+            background: `linear-gradient(135deg, ${T.brandL} 0%, ${T.brandMid}80 100%)`,
+            display: "flex", alignItems: "center", justifyContent: "center",
+            animation: "queuePulse 1.8s ease-in-out infinite", flexShrink: 0,
+          }}>
+            <span style={{ fontSize: 14, lineHeight: 1 }}>✦</span>
+          </div>
+          Building your upcoming days
+          <div style={{ width: 60, height: 3, background: T.border, borderRadius: 2, overflow: "hidden", flexShrink: 0 }}>
+            <div style={{ width: "40%", height: "100%", borderRadius: 2, background: `linear-gradient(90deg, ${T.brandMid}, ${T.brand})`, animation: "queueBarSlide 1.5s ease-in-out infinite" }} />
+          </div>
         </div>
       )}
       {/* ── ACHIEVEMENT CINEMATIC OVERLAY ── */}
@@ -7317,139 +8746,6 @@ ${timeHint}`;
         );
       })()}
 
-      {/* ── DAY COMPLETION CELEBRATION MODAL ── */}
-      {celebrationModal && (() => {
-        const { dayNum: cm_dayNum, earned, streakCount: cm_streak, crossedMilestone } = celebrationModal;
-        const nextDay = cm_dayNum + 1;
-        const hasNext = nextDay <= TOTAL_DAYS;
-        const quote = dailyQuotes[cm_dayNum];
-        const closeCelebration = () => {
-          setCelebrationModal(null);
-          if (crossedMilestone) {
-            setTimeout(() => setCredsMilestoneModal({
-              tier: crossedMilestone.tier,
-              copy: crossedMilestone.copy,
-              total: cashPot,
-            }), 120);
-          }
-        };
-        return (
-          <div style={{
-            position: "fixed", inset: 0, zIndex: 300,
-            background: "#2C2820",
-            display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
-            padding: "24px 20px",
-            overflow: "hidden",
-          }}>
-            <style>{`
-              @keyframes celebIn { from { opacity:0; transform: scale(0.88) translateY(20px); } to { opacity:1; transform: scale(1) translateY(0); } }
-              @keyframes confettiFall {
-                0%   { transform: translateY(-20px) rotate(0deg); opacity: 1; }
-                100% { transform: translateY(110vh) rotate(720deg); opacity: 0; }
-              }
-              @keyframes starPop {
-                0%   { transform: scale(0) rotate(-30deg); opacity: 0; }
-                60%  { transform: scale(1.3) rotate(10deg); opacity: 1; }
-                100% { transform: scale(1) rotate(0deg); opacity: 1; }
-              }
-            `}</style>
-
-            {/* Confetti */}
-            {Array.from({ length: 18 }, (_, i) => (
-              <div key={i} style={{
-                position: "absolute",
-                left: `${5 + (i * 5.5) % 90}%`,
-                top: `${-5 - (i * 7) % 20}%`,
-                width: i % 3 === 0 ? 10 : i % 3 === 1 ? 7 : 12,
-                height: i % 3 === 0 ? 10 : i % 3 === 1 ? 7 : 4,
-                borderRadius: i % 3 === 2 ? 2 : "50%",
-                background: ["#f0b429","#E0D4F8","#F0C050","#FFD8C4","#C4E0FF","#FBBF24"][i % 6],
-                animation: `confettiFall ${2.2 + (i * 0.18) % 1.8}s ease-in ${(i * 0.11) % 1.4}s both`,
-                pointerEvents: "none",
-              }} />
-            ))}
-
-            {/* Card */}
-            <div style={{
-              width: "100%", maxWidth: 400, textAlign: "center",
-              animation: "celebIn 0.5s cubic-bezier(0.22,1,0.36,1)",
-            }}>
-              {/* Checkmark circle */}
-              <div style={{ display: "flex", justifyContent: "center", marginBottom: 18 }}>
-                <div style={{
-                  width: 64, height: 64, borderRadius: "50%",
-                  background: "rgba(240,180,41,0.15)",
-                  border: "2px solid rgba(232,168,32,0.25)",
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  animation: "starPop 0.5s cubic-bezier(0.22,1,0.36,1) 0.1s both",
-                }}>
-                  <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
-                    <path d="M6 14l6 6 10-12" stroke="#E8A820" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
-                  </svg>
-                </div>
-              </div>
-
-              {/* Day done headline */}
-              <p style={{ fontFamily: T.sans, fontSize: 14, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "rgba(255,210,60,0.95)", margin: "0 0 8px" }}>
-                Day {cm_dayNum} complete
-              </p>
-              <h2 style={{ fontFamily: T.serif, fontSize: 36, fontWeight: 400, color: "#fff", margin: "0 0 6px", letterSpacing: "-0.5px", lineHeight: 1.1 }}>
-                You did it.
-              </h2>
-
-              {/* Only show streak at meaningful milestones: 3, 7, 14, 21, 30 */}
-              {[3, 7, 14, 21, 30].includes(cm_streak) ? (
-                <p style={{ fontFamily: T.sans, fontSize: 15, color: "rgba(255,255,255,0.6)", margin: "0 0 20px" }}>
-                  🔥 {cm_streak}-day streak
-                </p>
-              ) : <div style={{ height: 20 }} />}
-
-              {/* Creds earned */}
-              <div style={{ display: "inline-flex", alignItems: "center", gap: 10, background: "rgba(240,180,41,0.15)", border: "1px solid rgba(240,180,41,0.35)", borderRadius: 12, padding: "10px 22px", marginBottom: 28 }}>
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-                  <path d="M12 2C12.6 8 16 11.4 22 12C16 12.6 12.6 16 12 22C11.4 16 8 12.6 2 12C8 11.4 11.4 8 12 2Z" fill="#fad568"/>
-                  <circle cx="19" cy="5" r="1.5" fill="#fff" opacity="0.6"/>
-                </svg>
-                <span style={{ fontFamily: T.sans, fontSize: 16, fontWeight: 800, color: "#fad568" }}>+{earned} Sparks</span>
-              </div>
-
-              {/* Quote, bigger, more readable */}
-              <div style={{ margin: "0 0 32px", padding: "0 4px" }}>
-                {quote ? (
-                  <>
-                    <p style={{ fontFamily: T.serif, fontSize: 19, color: "rgba(255,255,255,0.78)", margin: "0 0 10px", lineHeight: 1.6, fontStyle: "italic" }}>
-                      {quote.text}
-                    </p>
-
-                  </>
-                ) : null}
-              </div>
-
-              {/* CTA */}
-              {hasNext ? (
-                <button onClick={() => {
-                  closeCelebration();
-                  if (!crossedMilestone) setTimeout(() => setActiveDay(nextDay), 60);
-                  else setTimeout(() => setActiveDay(nextDay), 700);
-                }}
-                  style={{ width: "100%", background: "#fff", color: T.black, border: "none", borderRadius: 12, padding: "16px 0", fontFamily: T.sans, fontSize: 17, fontWeight: 700, cursor: "pointer", letterSpacing: -0.3, marginBottom: 12 }}>
-                  {dayTasks[nextDay] ? `Start Day ${nextDay} →` : "Continue →"}
-                </button>
-              ) : (
-                <button onClick={closeCelebration}
-                  style={{ width: "100%", background: "#fff", color: T.black, border: "none", borderRadius: 12, padding: "16px 0", fontFamily: T.sans, fontSize: 17, fontWeight: 700, cursor: "pointer", letterSpacing: -0.3, marginBottom: 12 }}>
-                  Keep going →
-                </button>
-              )}
-              <button onClick={closeCelebration}
-                style={{ background: "none", border: "none", fontFamily: T.sans, fontSize: 13, color: "rgba(255,255,255,0.45)", cursor: "pointer", padding: "4px 0" }}>
-                Back to dashboard
-              </button>
-            </div>
-          </div>
-        );
-      })()}
-
       {/* ── CREDS MILESTONE MODAL ── */}
       {credsMilestoneModal && (() => {
         const { tier, copy, total } = credsMilestoneModal;
@@ -7564,7 +8860,7 @@ ${timeHint}`;
                 <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
                   <div style={{ width: 48, height: 48, borderRadius: 14, background: "#fff", border: "1.5px solid rgba(200,150,30,0.25)", display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 2px 8px rgba(180,130,20,0.1)", flexShrink: 0 }}>
                     <svg width="26" height="26" viewBox="0 0 24 24" fill="none">
-                      <path d="M12 2C12.6 8 16 11.4 22 12C16 12.6 12.6 16 12 22C11.4 16 8 12.6 2 12C8 11.4 11.4 8 12 2Z" fill="#E8A820"/>
+                      <path d={SPARKLE_PATH} fill="#E8A820"/>
                       <circle cx="19" cy="5" r="1.5" fill="#F0C050" opacity="0.75"/>
                       <circle cx="5" cy="19" r="1" fill="#F0C050" opacity="0.6"/>
                     </svg>
@@ -7649,6 +8945,8 @@ ${timeHint}`;
           dayTasks={dayTasks}
           dayStatus={dayStatus}
           dayNotes={dayNotes}
+          dailyQueue={dailyQueue}
+          checkedSteps={checkedSteps}
           currentWeekTheme={currentWeekTheme}
           weekGoalOverride={weekGoalOverride}
           weekFocusInput={weekFocusInput}
@@ -7660,6 +8958,8 @@ ${timeHint}`;
           isGoalClarification={brilGoalClarification}
           goalDeadline={goalDeadline}
           dailyTimeAvailable={dailyTimeAvailable}
+          intentions={intentions}
+          brilPersonality={brilPersonality}
           onClose={() => { setBrilOpen(false); setBrilGoalClarification(false); }}
           onInsight={async (text, cmds = {}) => {
             setBrilInsight(text);
@@ -7670,7 +8970,7 @@ ${timeHint}`;
             (async () => {
               try {
                 const hasChange = !!(cmds.weekGoal || cmds.changeGoal !== undefined || cmds.changeGoalCustom || cmds.requestedTask || cmds.replaceTodayTask || cmds.replaceDayN || cmds.rebuildWeek || cmds.slowDown || cmds.setDeadline);
-                const prompt = `Rate the quality of this Be Brilliant coaching interaction for a career development program. Score 1-10 based on: depth of insight shared, whether a meaningful change was made, and how much it will improve the person's program.
+                const prompt = `Rate the quality of this BeBrilliant coaching interaction for a career development program. Score 1-10 based on: depth of insight shared, whether a meaningful change was made, and how much it will improve the person's program.
 
 Interaction summary: "${text?.slice(0, 400) || "brief exchange"}"
 Program change made: ${hasChange ? "yes" : "no"}
@@ -7680,8 +8980,9 @@ Return ONLY valid JSON: {"score": N, "reason": "one short sentence"}`;
                 const res = await fetch("/api/generate", {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 80, messages: [{ role: "user", content: prompt }] }),
+                  body: JSON.stringify({ model: MODEL_FAST, max_tokens: 80, messages: [{ role: "user", content: prompt }] }),
                 });
+                if (!res.ok) throw new Error("API " + res.status);
                 const data = await res.json();
                 const raw = extractText(data).trim();
                 const parsed = JSON.parse(raw.replace(/```json|```/g, "").trim());
@@ -7729,6 +9030,9 @@ Return ONLY valid JSON: {"score": N, "reason": "one short sentence"}`;
               setGoalUpdatedDay(highestUnlocked);
               setGoalStatement("");
               setBrilChangeMade(true);
+              // Invalidate current day queue so it regenerates with new goal
+              setDailyQueue(prev => { const n = {...prev}; delete n[highestUnlocked]; return n; });
+              setDailyQueueFailed(prev => ({ ...prev, [highestUnlocked]: false }));
               // Regenerate week arc (themes + milestones) for the new goal
               const newArc = await generateWeekArc(updatedAnswers, plan.classification || {});
               if (newArc) {
@@ -7742,6 +9046,9 @@ Return ONLY valid JSON: {"score": N, "reason": "one short sentence"}`;
 
             if (cmds.rebuildWeek) {
               setGoalUpdating(true);
+              // Invalidate current day queue
+              setDailyQueue(prev => { const n = {...prev}; delete n[highestUnlocked]; return n; });
+              setDailyQueueFailed(prev => ({ ...prev, [highestUnlocked]: false }));
               const wkStart = (currentWeek - 1) * 7 + 1;
               const remainingDays = Array.from({ length: 7 }, (_, j) => wkStart + j)
                 .filter(d => d >= highestUnlocked && d <= wkStart + 6 && !dayStatus[d]);
@@ -7758,6 +9065,9 @@ Return ONLY valid JSON: {"score": N, "reason": "one short sentence"}`;
             if (cmds.weekGoal) {
               setWeekGoalOverride(cmds.weekGoal);
               setBrilChangeMade(true);
+              // Invalidate current day queue so it regenerates with new weekly focus
+              setDailyQueue(prev => { const n = {...prev}; delete n[highestUnlocked]; return n; });
+              setDailyQueueFailed(prev => ({ ...prev, [highestUnlocked]: false }));
               await regenRemainingDays(text);
             }
 
@@ -7768,6 +9078,9 @@ Return ONLY valid JSON: {"score": N, "reason": "one short sentence"}`;
               setGoalUpdatedDay(highestUnlocked);
               setGoalStatement("");
               setBrilChangeMade(true);
+              // Invalidate current day queue so it regenerates with new goal
+              setDailyQueue(prev => { const n = {...prev}; delete n[highestUnlocked]; return n; });
+              setDailyQueueFailed(prev => ({ ...prev, [highestUnlocked]: false }));
               // Regenerate week arc (themes + milestones) for the new goal
               const newArc = await generateWeekArc(updatedAnswers, plan.classification || {});
               if (newArc) {
@@ -7785,6 +9098,9 @@ Return ONLY valid JSON: {"score": N, "reason": "one short sentence"}`;
               if (todayNum <= TOTAL_DAYS && !dayStatus[todayNum]) {
                 setGoalUpdating(true);
                 setBrilPickDay(todayNum);
+                // Invalidate the daily queue so it regenerates with the new direction
+                setDailyQueue(prev => { const n = {...prev}; delete n[todayNum]; return n; });
+                setDailyQueueFailed(prev => ({ ...prev, [todayNum]: false }));
                 const specificHint = `REPLACE TODAY'S TASK: ${cmds.replaceTodayTask}. Build the task directly around this. TIME CONSTRAINT: task must be exactly ${dailyTimeAvailable}.`;
                 const t = await generateNextDayTask(plan, todayNum - 1, dayStatus[todayNum - 1] || 'done', specificHint, text, dayTasks, dayStatus, dayNotes, dailyTimeAvailable);
                 if (t) setDayTasks(prev => ({ ...prev, [todayNum]: t }));
@@ -7840,7 +9156,7 @@ Return ONLY valid JSON: {"score": N, "reason": "one short sentence"}`;
                   cmds.slowDown ? "Requested slower pace" : null,
                 ].filter(Boolean);
 
-                const summaryPrompt = `Summarize this Be Brilliant coaching session in 2-3 sentences. Focus on: what the person was working through, any blockers or concerns they raised, what was resolved or shifted. Be specific, this summary will inform future task generation and coaching for this person.
+                const summaryPrompt = `Summarize this BeBrilliant coaching session in 2-3 sentences. Focus on: what the person was working through, any blockers or concerns they raised, what was resolved or shifted. Be specific, this summary will inform future task generation and coaching for this person.
 
 Session content: "${text?.slice(0, 600) || "brief exchange"}"
 Program changes made: ${changes.length ? changes.join("; ") : "none"}
@@ -7850,8 +9166,9 @@ Write the summary in third person ("They were working on...", "They mentioned...
                 const res = await fetch("/api/generate", {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 120, messages: [{ role: "user", content: summaryPrompt }] }),
+                  body: JSON.stringify({ model: MODEL_FAST, max_tokens: 120, messages: [{ role: "user", content: summaryPrompt }] }),
                 });
+                if (!res.ok) throw new Error("API " + res.status);
                 const data = await res.json();
                 const summary = extractText(data).trim();
                 if (summary) {
@@ -8026,6 +9343,88 @@ Write the summary in third person ("They were working on...", "They mentioned...
         />
       )}
 
+      {/* ── IMPLEMENTATION INTENTION MODAL ── */}
+      {intentionModal && (
+        <IntentionModal
+          task={intentionModal && dailyQueue[intentionModal.dayNum]?.[intentionModal.taskIdx]}
+          onCommit={({ when, where }) => {
+            const key = `${intentionModal.dayNum}_${intentionModal.taskIdx}`;
+            const taskTitle = dailyQueue[intentionModal.dayNum]?.[intentionModal.taskIdx]?.title || "a task";
+            setIntentions(prev => ({ ...prev, [key]: { when, where, dayNum: intentionModal.dayNum, task: taskTitle } }));
+            const commitNote = `[Scheduled] "${taskTitle}" - when: ${when}, where: ${where}`;
+            setDayNotes(prev => ({ ...prev, [intentionModal.dayNum]: (prev[intentionModal.dayNum] ? prev[intentionModal.dayNum] + " | " : "") + commitNote }));
+            setIntentionModal(null);
+          }}
+          onClose={() => setIntentionModal(null)}
+        />
+      )}
+
+      {/* ── SPARKS SHOP MODAL ── */}
+      {sparksShopOpen && (
+        <SparksShopModal
+          cashPot={cashPot}
+          streakFreezes={streakFreezes}
+          streakCount={streakCount}
+          streakBroken={streakBrokenInfo && (Date.now() - streakBrokenInfo.timestamp) < 86400000}
+          brilPersonality={brilPersonality}
+          onPurchase={handleShopPurchase}
+          onClose={() => setSparksShopOpen(false)}
+        />
+      )}
+
+      {/* ── WELCOME BACK SCREEN ── */}
+      {showWelcomeBack && (
+        <WelcomeBackScreen
+          plan={plan}
+          daysAway={lastCompletionTimestamp ? Math.floor((Date.now() - lastCompletionTimestamp) / 86400000) : 0}
+          daysCompleted={doneCount}
+          streakBefore={streakCount}
+          cashPot={cashPot}
+          onContinue={handleWelcomeBackReduced}
+          onFullSession={handleWelcomeBackFull}
+        />
+      )}
+
+      {/* ── REVEAL TOMORROW PREVIEW ── */}
+      {revealTomorrow && dayTasks[revealTomorrow] && (() => {
+        const rt = dayTasks[revealTomorrow];
+        const rtColors = tagColors[rt.tag] || tagColors["Read"];
+        return (
+          <div style={{ position: "fixed", inset: 0, background: "rgba(45,42,62,0.55)", zIndex: 220, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 16px" }}
+            onClick={e => e.target === e.currentTarget && setRevealTomorrow(null)}>
+            <div style={{ width: "100%", maxWidth: 420, background: "#fff", borderRadius: 20, padding: "28px 24px 24px", boxShadow: "0 24px 64px rgba(0,0,0,0.22)" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16 }}>
+                <span style={{ fontSize: 20 }}>👀</span>
+                <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: 1.2, textTransform: "uppercase", color: T.muted, margin: 0 }}>Tomorrow's preview — Day {revealTomorrow}</p>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
+                <span style={{ fontFamily: T.sans, fontSize: 12, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", padding: "4px 10px", background: rtColors.bg, color: rtColors.text, border: `1.5px solid ${rtColors.border}`, borderRadius: 6 }}>{rt.tag}</span>
+                <span style={{ fontFamily: T.sans, fontSize: 14, color: T.body }}>{rt.time}</span>
+              </div>
+              <h3 style={{ fontFamily: T.sans, fontSize: 20, fontWeight: 700, color: T.ink, margin: "0 0 10px", lineHeight: 1.3 }}>{rt.title}</h3>
+              <p style={{ fontFamily: T.sans, fontSize: 15, color: T.body, margin: "0 0 20px", lineHeight: 1.7 }}>{rt.desc}</p>
+              {rt.difficulty && (() => {
+                const phaseStyles = {
+                  warmup: { bg: "#E6F5EE", color: "#0F6E56", label: "Warm-up" },
+                  build: { bg: "#E8F0FF", color: "#3355AA", label: "Build" },
+                  deep: { bg: "#F4EDF8", color: "#6B3880", label: "Deep work" },
+                  cooldown: { bg: "#FFF4EE", color: "#9A3D20", label: "Cool-down" },
+                };
+                const ps = phaseStyles[rt.difficulty] || phaseStyles.build;
+                return <span style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: 0.8, textTransform: "uppercase", padding: "4px 10px", background: ps.bg, color: ps.color, borderRadius: 6, display: "inline-block", marginBottom: 20 }}>{ps.label} phase</span>;
+              })()}
+              <div style={{ borderTop: `1px solid ${T.border}`, paddingTop: 16, textAlign: "center" }}>
+                <p style={{ fontFamily: T.sans, fontSize: 13, color: T.muted, margin: "0 0 14px" }}>Complete today to unlock this task.</p>
+                <button onClick={() => setRevealTomorrow(null)}
+                  style={{ background: T.brand, color: "#1E1E2A", border: "none", borderRadius: 50, padding: "13px 32px", fontFamily: T.sans, fontSize: 15, fontWeight: 600, cursor: "pointer" }}>
+                  Back to today
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
     </div>
   );
 }
@@ -8177,6 +9576,8 @@ function BrilIntroScreen({ answers, onComplete }) {
           dayTasks={{}}
           dayStatus={{}}
           dayNotes={{}}
+          dailyQueue={{}}
+          checkedSteps={{}}
           currentWeekTheme="Getting started"
           weekGoalOverride={null}
           weekFocusInput={{}}
@@ -8187,7 +9588,7 @@ function BrilIntroScreen({ answers, onComplete }) {
           currentDay={1}
           isGoalClarification={true}
           goalDeadline={null}
-          dailyTimeAvailable="30 minutes"
+          dailyTimeAvailable="2 hours"
           onClose={() => {
             setBrilOpen(false);
             setDone(true);
@@ -8275,7 +9676,7 @@ export default function BeBrilApp() {
       cs.setAttribute("charset", "utf-8");
       document.head.prepend(cs);
     }
-    // Set favicon using the Be Brilliant logo SVG
+    // Set favicon using the BeBrilliant logo SVG
     const faviconSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 80"><rect width="80" height="80" rx="18" fill="%23D99A1E"/><circle cx="16" cy="66" r="7.5" fill="%23fff"/><line x1="21" y1="61" x2="42" y2="40" stroke="%23fff" stroke-width="7" stroke-linecap="round"/><path d="M53 5C55.2 21 64 29.8 78 32 64 34.2 55.2 43 53 59 50.8 43 42 34.2 28 32 42 29.8 50.8 21 53 5Z" fill="%23fff"/></svg>`;
     let favicon = document.querySelector('link[rel="icon"]');
     if (!favicon) { favicon = document.createElement("link"); favicon.rel = "icon"; document.head.appendChild(favicon); }
@@ -8305,7 +9706,7 @@ export default function BeBrilApp() {
     try {
       const dashSaved = await Store.get(storageKey) || {};
       const doneCount = Object.values(dashSaved.dayStatus || {}).filter(s => s === 'done').length;
-      const streakCount = calcStreak(dashSaved.dayStatus || {});
+      const streakCount = calcStreak(dashSaved.dayStatus || {}, dashSaved.streakFreezeActive || {});
       const planToSave = {
         ...thePlan,
         _resumeDay: doneCount + 1,
