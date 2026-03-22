@@ -1,3 +1,4 @@
+"use client";
 import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 
 // ─── SEO Head Manager ─────────────────────────────────────
@@ -180,7 +181,7 @@ function extractText(data) {
 
 // ─── Shared API fetch with error check ────────────────────
 async function apiFetch(body, signal) {
-  const res = await fetch("/api/generate", {
+  const res = await fetch("/api/anthropic", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     ...(signal ? { signal } : {}),
@@ -2606,9 +2607,12 @@ function LandingPage({ onStart, onResume, savedPlan }) {
                 </div>
 
                 {/* Daily progress bar — matches actual */}
-                <div style={{ marginBottom: 10, display: "flex", alignItems: "center", gap: 8 }}>
-                  <div style={{ flex: 1, height: 7, background: T.border, borderRadius: 4, overflow: "hidden", position: "relative" }}>
+                <div style={{ marginBottom: 14, display: "flex", alignItems: "center", gap: 8 }}>
+                  <div style={{ flex: 1, height: 7, background: T.border, borderRadius: 4, overflow: "visible", position: "relative" }}>
                     <div style={{ position: "absolute", left: "12.5%", top: -1, bottom: -1, width: 1.5, background: T.brandD, borderRadius: 1, zIndex: 2 }} />
+                    <div style={{ position: "absolute", left: "12.5%", top: 10, transform: "translateX(-50%)", zIndex: 2 }}>
+                      <span style={{ fontFamily: T.sans, fontSize: 7, fontWeight: 700, color: T.brandD, letterSpacing: 0.5, textTransform: "uppercase" }}>Goal</span>
+                    </div>
                     <div style={{ height: "100%", borderRadius: 3, background: "linear-gradient(90deg, #E8A820 0%, #D49518 100%)", width: "8%", transition: "width 0.4s ease" }} />
                   </div>
                   <span style={{ fontFamily: T.sans, fontSize: 10, fontWeight: 600, color: T.brandD, whiteSpace: "nowrap" }}>1 done</span>
@@ -3461,7 +3465,7 @@ Respond with ONLY valid JSON, no preamble, no markdown fences:
 
   // Retry wrapper with exponential backoff for transient failures
   const tryFetch = async (attempt = 0) => {
-    const response = await fetch("/api/generate", {
+    const response = await fetch("/api/anthropic", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -3573,7 +3577,7 @@ CYCLE MILESTONES (mid, end):
 Return ONLY valid JSON. a1/a2/a3 and mid/end MUST be included:
 {"a1":"...","a2":"...","a3":"...","w1":"...","w2":"...","w3":"...","w4":"...","w5":"...","w6":"...","w7":"...","w8":"...","mid":"...","end":"..."}`;
   try {
-    const res = await fetch("/api/generate", {
+    const res = await fetch("/api/anthropic", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -3800,7 +3804,7 @@ Return ONLY valid JSON, no markdown:
 ]}`;
 
   try {
-    const res = await fetch("/api/generate", {
+    const res = await fetch("/api/anthropic", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -3999,7 +4003,7 @@ RULES:
 JSON ONLY, no markdown: {"tasks":[{"tag":"Apply|Read|Reflect","time":"X min","title":"...","desc":"...","steps":["..."],"parentTask":"...(omit if standalone)","difficulty":"${phase === "early" ? "warmup|build" : phase === "late" ? "deep|cooldown" : "warmup|build|deep|cooldown"}","whyBase":"..."}]}`;
 
   try {
-    const res = await fetch("/api/generate", {
+    const res = await fetch("/api/anthropic", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -4157,7 +4161,7 @@ JSON ONLY, no markdown:
 {"tag":"Apply|Read|Reflect","time":"X min","title":"...","desc":"...","steps":["..."],"parentTask":"...(omit if standalone)","whyBase":"..."}`;
 
   try {
-    const res = await fetch("/api/generate", {
+    const res = await fetch("/api/anthropic", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -4330,7 +4334,7 @@ Return ONLY valid JSON, no markdown:
 ]}`;
 
   try {
-    const res = await fetch("/api/generate", {
+    const res = await fetch("/api/anthropic", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -4490,7 +4494,7 @@ Return ONLY valid JSON, no markdown:
 {"tag":"Apply|Read|Reflect","time":"${timePref}","title":"...","desc":"...","steps":[2-4 steps depending on time, each a single concrete action],"whyBase":"..."}`;
 
   try {
-    const res = await fetch("/api/generate", {
+    const res = await fetch("/api/anthropic", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -4820,7 +4824,7 @@ IMPORTANT — INTRODUCE YOURSELF FIRST: This is the very first time they're meet
 Then acknowledge their goal: ${isCustomGoal ? `they wrote their own goal, so say "You wrote that you want to [goal]" and honor their own words` : `they picked from a list, so say "You chose [goal] as your focus" and probe whether that captures what they really want`}. Ask one thoughtful question that probes whether that's the real thing, what's actually driving it, what specifically they're trying to change, or what real progress would look like for them. If what they say is more specific or different from their answer, use CMD:CHANGE_GOAL_CUSTOM or CMD:CHANGE_GOAL to update it immediately. Do NOT mention a specific timeframe like "8 weeks" unless the person brings up a deadline themselves. IMPORTANT: If their goal includes a timeline or deadline (e.g. "land a job by end of April", "get promoted before my review in June", "launch by Q3"), capture it immediately with CMD:SET_DEADLINE:YYYY-MM-DD. Today is ${TODAY_ISO()}, so "by June" means ${new Date().getMonth() < 5 ? new Date().getFullYear() : new Date().getFullYear() + 1}-06-30, "by April" means ${new Date().getMonth() < 3 ? new Date().getFullYear() : new Date().getFullYear() + 1}-04-30. NEVER use a past year. If their goal is confirmed, end positively and let them know you'll build a plan around what you've discussed. Keep it tight, 3-4 exchanges, not an intake interview.`
   : needsDirectionQ
   ? "They want to move into a different field or start something of their own but haven't said where. Open with a warm, curious question asking what direction they're considering."
-  : `${!brilSessionLog?.length ? `FIRST CHAT ON DASHBOARD: Introduce yourself briefly. Something like: "Hey${answers.name ? ` ${(answers.name || "").trim()}` : ""}, I'm Mr. Bril. I'll be your thinking partner through this whole program. I pick your tasks, I track your progress, and I'll call it out when something's off. Let's talk." Keep the intro to 1-2 sentences, then move straight into your opening question. ` : ""}Open with a single specific question that shows you've been paying attention. HIGHEST PRIORITY OPENER: if any of their notes or commitments mention a scheduled task (e.g. 'Day 3 commitment: task — when: tonight at 8pm, where: at my desk'), follow up on it first. Say something like: 'You said you'd do [task] at [when] at [where]. How did that go?' This closes the accountability loop. Other good openers: reference something they wrote in a day note, gently ask about a skipped task, check whether their weekly focus still feels right, or ask what's on their mind today. Don't open with a generic 'how are things going'.`}`;
+  : `Open with a single specific question that shows you've been paying attention. Do NOT introduce yourself — the person already knows who you are from the onboarding conversation. HIGHEST PRIORITY OPENER: if any of their notes or commitments mention a scheduled task (e.g. 'Day 3 commitment: task — when: tonight at 8pm, where: at my desk'), follow up on it first. Say something like: 'You said you'd do [task] at [when] at [where]. How did that go?' This closes the accountability loop. Other good openers: reference something they wrote in a day note, gently ask about a skipped task, check whether their weekly focus still feels right, or ask what's on their mind today. Don't open with a generic 'how are things going'.`}`;
 
   // Kick off with Bril's opening question
   useEffect(() => {
@@ -4828,7 +4832,7 @@ Then acknowledge their goal: ${isCustomGoal ? `they wrote their own goal, so say
     const open = async () => {
       setLoading(true);
       try {
-        const res = await fetch("/api/generate", {
+        const res = await fetch("/api/anthropic", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           signal: controller.signal,
@@ -4888,7 +4892,7 @@ Then acknowledge their goal: ${isCustomGoal ? `they wrote their own goal, so say
       : systemPrompt;
 
     try {
-      const res = await fetch("/api/generate", {
+      const res = await fetch("/api/anthropic", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -5128,7 +5132,7 @@ Rules:
 Return ONLY the statement, nothing else.`;
 
   try {
-    const res = await fetch("/api/generate", {
+    const res = await fetch("/api/anthropic", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -5239,7 +5243,7 @@ CYCLE COMPLETION: This is the end of a program cycle. After your normal check-in
     const open = async () => {
       setLoading(true);
       try {
-        const res = await fetch("/api/generate", {
+        const res = await fetch("/api/anthropic", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -5271,7 +5275,7 @@ CYCLE COMPLETION: This is the end of a program cycle. After your normal check-in
     setMessages(updated);
     setLoading(true);
     try {
-      const res = await fetch("/api/generate", {
+      const res = await fetch("/api/anthropic", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -5841,6 +5845,7 @@ function DashboardScreen({ plan: initialPlan, onBack, startDate }) {
   // Fixed time constant — 2-hour daily sessions with progressive micro-tasks
   const dailyTimeAvailable = "2 hours";
   const [celebrationModal, setCelebrationModal] = useState(null); // {dayNum, earned, crossedMilestone?}
+  const [showConfetti, setShowConfetti] = useState(false); // triggers confetti particles on day complete
   const [credsMilestoneModal, setCredsMilestoneModal] = useState(null); // {tier, copy, total}
   const [achievementToasts, setAchievementToasts] = useState([]);
   const [showGoalEdit, setShowGoalEdit] = useState(false);
@@ -6524,16 +6529,16 @@ function DashboardScreen({ plan: initialPlan, onBack, startDate }) {
       const newPot = cashPot + earned;
       const crossedMilestone = CRED_MILESTONES.find(m => cashPot < m.at && newPot >= m.at) || null;
       setTimeout(() => setCashPot(prev => prev + earned), 500);
-      if (crossedMilestone) {
-        setTimeout(() => setCredsMilestoneModal({
-          tier: crossedMilestone.tier,
-          copy: crossedMilestone.copy,
-          total: newPot,
-        }), 600);
-      }
 
       // Pick a quote from the static library, instant, no API cost
       setDailyQuotes(prev => ({ ...prev, [dayNum]: pickQuote(dayNum) }));
+
+      // Trigger confetti celebration
+      setShowConfetti(true);
+      setTimeout(() => setShowConfetti(false), 3500);
+
+      // Set full-screen celebration modal
+      setCelebrationModal({ dayNum, earned, streakCount: newStreakCount, crossedMilestone, tasksCompleted, comebackBonus, luckySparks });
     }
     if (dayNum < TOTAL_DAYS) {
       const nextDay = dayNum + 1;
@@ -6695,6 +6700,7 @@ function DashboardScreen({ plan: initialPlan, onBack, startDate }) {
         @keyframes dbFloat3 { 0%, 100% { transform: translateY(0) rotate(20deg); } 50% { transform: translateY(-7px) rotate(24deg); } }
         @keyframes dbSparkle { 0%, 100% { opacity: 0.35; transform: scale(0.85); } 50% { opacity: 0.65; transform: scale(1.15); } }
         @keyframes completedSlideIn { 0% { opacity: 0; transform: translateX(-12px); background: rgba(123,175,126,0.12); } 50% { background: rgba(123,175,126,0.08); } 100% { opacity: 1; transform: translateX(0); background: transparent; } }
+        @keyframes confettiDrop { 0% { transform: translateY(-10vh) rotate(0deg); opacity: 1; } 80% { opacity: 1; } 100% { transform: translateY(100vh) rotate(720deg); opacity: 0; } }
         @keyframes potLand {
           0%   { transform: scale(1) rotate(0deg); }
           20%  { transform: scale(1.18) rotate(-4deg); }
@@ -6807,6 +6813,35 @@ function DashboardScreen({ plan: initialPlan, onBack, startDate }) {
 
         </div>
       </div>
+
+      {/* ── CONFETTI CELEBRATION ── */}
+      {showConfetti && (
+        <div style={{ position: "fixed", inset: 0, pointerEvents: "none", zIndex: 999, overflow: "hidden" }}>
+          {Array.from({ length: 40 }, (_, i) => {
+            const colors = ["#E8A820", "#D8B860", "#7BAF7E", "#6B50B8", "#E8A080", "#C4E0FF", "#F0D888", "#FFD8C4", "#D2E8D8", "#E0D4F8"];
+            const color = colors[i % colors.length];
+            const left = Math.random() * 100;
+            const delay = Math.random() * 1.5;
+            const duration = 2 + Math.random() * 2;
+            const size = 6 + Math.random() * 8;
+            const isCircle = Math.random() > 0.5;
+            return (
+              <div key={i} style={{
+                position: "absolute",
+                top: -20,
+                left: `${left}%`,
+                width: size,
+                height: size,
+                borderRadius: isCircle ? "50%" : 2,
+                background: color,
+                animation: `confettiDrop ${duration}s ease-in ${delay}s forwards`,
+                opacity: 0,
+                animationFillMode: "forwards",
+              }} />
+            );
+          })}
+        </div>
+      )}
 
       <div ref={dayContentRef} style={{ maxWidth: 600, margin: "0 auto", padding: "16px clamp(16px, 4vw, 24px) 24px" }}>
 
@@ -7143,10 +7178,14 @@ function DashboardScreen({ plan: initialPlan, onBack, startDate }) {
                       const hitBase = minutesDone >= BASELINE_MIN;
                       const tasksAcked = Object.keys(taskDoneAck).filter(k => k.startsWith(`${dayNum}_`) && taskDoneAck[k]).length;
                       return (
-                        <div style={{ marginBottom: 16, padding: "0 2px" }}>
+                        <div style={{ marginBottom: 28, padding: "0 2px" }}>
                           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                            <div style={{ flex: 1, height: 10, background: T.border, borderRadius: 5, overflow: "hidden", position: "relative" }}>
+                            <div style={{ flex: 1, height: 10, background: T.border, borderRadius: 5, overflow: "visible", position: "relative" }}>
+                              {/* Baseline marker with "Goal" label */}
                               <div style={{ position: "absolute", left: `${basePct}%`, top: -2, bottom: -2, width: 2, background: hitBase ? "#7BAF7E" : T.brandD, borderRadius: 1, zIndex: 2, transition: "background 0.3s" }} />
+                              <div style={{ position: "absolute", left: `${basePct}%`, top: 14, transform: "translateX(-50%)", zIndex: 2 }}>
+                                <span style={{ fontFamily: T.sans, fontSize: 10, fontWeight: 700, color: hitBase ? "#7BAF7E" : T.brandD, letterSpacing: 0.5, textTransform: "uppercase", whiteSpace: "nowrap" }}>Goal</span>
+                              </div>
                               <div style={{
                                 height: "100%", borderRadius: 4,
                                 background: hitBase ? "linear-gradient(90deg, #7BAF7E 0%, #5E9462 100%)" : minutesDone > 0 ? "linear-gradient(90deg, #E8A820 0%, #D49518 100%)" : "transparent",
@@ -7158,11 +7197,6 @@ function DashboardScreen({ plan: initialPlan, onBack, startDate }) {
                               {minutesDone === 0 ? "Let's go" : hitBase ? "✦ Bonus territory" : `${tasksAcked} done`}
                             </span>
                           </div>
-                          {!hitBase && minutesDone > 0 && (
-                            <div style={{ marginTop: 5, padding: "0 1px" }}>
-                              <span style={{ fontFamily: T.sans, fontSize: 12, fontWeight: 500, color: T.muted }}>Today's goal</span>
-                            </div>
-                          )}
                         </div>
                       );
                     })()}
@@ -7688,16 +7722,20 @@ function DashboardScreen({ plan: initialPlan, onBack, startDate }) {
               {status === 'done' && dayNum < TOTAL_DAYS && (
                 <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                   {/* Celebration card */}
-                  <div style={{ background: "#F0DCA0", borderRadius: 20, padding: "22px 24px", border: "1.5px solid #D8B860" }}>
-                    {streakCount === 3 && <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", color: T.brand, margin: "0 0 6px" }}>3-day streak · Look at you go.</p>}
-                    {streakCount === 7 && <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", color: T.brand, margin: "0 0 6px" }}>7 days straight · A whole week. Brilliant.</p>}
-                    {streakCount === 14 && <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", color: T.brand, margin: "0 0 6px" }}>Two weeks · Most people quit by now. Not you.</p>}
-                    {streakCount === 21 && <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", color: T.brand, margin: "0 0 6px" }}>21 days · Okay, this is officially a habit now.</p>}
-                    {streakCount === 30 && <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", color: T.brand, margin: "0 0 6px" }}>30 days · You absolute legend.</p>}
-                    <p style={{ fontFamily: T.sans, fontSize: 18, color: T.ink, margin: "0 0 4px", fontWeight: 700 }}>
-                      Day {dayNum}, crushed it.{streakCount > 1 ? ` 🔥 ${streakCount}` : ""}
-                      {celebrationModal?.tasksCompleted > 1 && <span style={{ fontFamily: T.sans, fontSize: 14, fontWeight: 500, color: T.body, marginLeft: 6 }}>· {celebrationModal.tasksCompleted} tasks done</span>}
-                    </p>
+                  <div style={{ background: "#FFFDF7", borderRadius: 20, padding: "22px 24px", border: `1.5px solid ${T.brandMid}40`, boxShadow: "0 2px 12px rgba(232,168,32,0.06)" }}>
+                    {streakCount === 3 && <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", color: T.brandD, margin: "0 0 6px" }}>3-day streak · Look at you go.</p>}
+                    {streakCount === 7 && <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", color: T.brandD, margin: "0 0 6px" }}>7 days straight · A whole week. Brilliant.</p>}
+                    {streakCount === 14 && <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", color: T.brandD, margin: "0 0 6px" }}>Two weeks · Most people quit by now. Not you.</p>}
+                    {streakCount === 21 && <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", color: T.brandD, margin: "0 0 6px" }}>21 days · Okay, this is officially a habit now.</p>}
+                    {streakCount === 30 && <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", color: T.brandD, margin: "0 0 6px" }}>30 days · You absolute legend.</p>}
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
+                      <div style={{ width: 32, height: 32, borderRadius: "50%", background: T.brandL, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                        <svg width="16" height="16" viewBox="0 0 20 20" fill="none"><path d="M4 10l4.5 4.5L16 5.5" stroke={T.brandD} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                      </div>
+                      <p style={{ fontFamily: T.sans, fontSize: 18, color: T.ink, margin: 0, fontWeight: 700 }}>
+                        Day {dayNum}, crushed it.{streakCount > 1 ? ` 🔥 ${streakCount}` : ""}
+                      </p>
+                    </div>
                     {goalUpdatedDay === dayNum && (
                       <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: 1.2, textTransform: "uppercase", color: T.brand, margin: "0 0 6px" }}>Goal updated, tasks reshaped ✓</p>
                     )}
@@ -7728,27 +7766,84 @@ function DashboardScreen({ plan: initialPlan, onBack, startDate }) {
                     )}
                   </div>
 
-                  {/* What you did — past day task list */}
+                  {/* What you did — past day task list, expandable */}
                   {dailyQueue[dayNum] && dailyQueue[dayNum].length > 0 && (() => {
-                    const completedQ = dailyQueue[dayNum].filter((qt, qi) => {
+                    const allQ = dailyQueue[dayNum];
+                    // Show all tasks that were attempted (acknowledged or had steps checked), plus fully completed ones
+                    const shownQ = allQ.map((qt, qi) => {
                       const qChecked = checkedSteps[`${dayNum}_${qi}`] || {};
-                      return (qt.steps || []).length === 0 || (qt.steps || []).every((_, si) => qChecked[si]);
-                    });
-                    if (completedQ.length === 0) return null;
+                      const anyChecked = Object.values(qChecked).some(Boolean);
+                      const allDone = (qt.steps || []).length === 0 || (qt.steps || []).every((_, si) => qChecked[si]);
+                      const acked = taskDoneAck[`${dayNum}_${qi}`];
+                      return (allDone || acked || anyChecked) ? { ...qt, _qi: qi, _allDone: allDone } : null;
+                    }).filter(Boolean);
+                    if (shownQ.length === 0) return null;
                     return (
                     <div style={{ background: "#fff", border: `1px solid ${T.border}`, borderRadius: 20, padding: "18px 20px", marginBottom: 0 }}>
                       <p style={{ fontFamily: T.sans, fontSize: 12, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", color: T.muted, margin: "0 0 12px" }}>What you did</p>
-                      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                        {completedQ.map((qt, qi) => {
+                      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                        {shownQ.map((qt, idx) => {
                           const qColors = tagColors[qt.tag] || tagColors["Read"];
+                          const pastExpandKey = `past_${dayNum}_${qt._qi}`;
+                          const isPastExpanded = expandedCompletedTask[pastExpandKey];
+                          const pastNote = dayNotes[`${dayNum}_task_${qt._qi}`] || "";
+                          const pastIntention = intentions[`${dayNum}_${qt._qi}`];
                           return (
-                            <div key={qi} style={{ background: "#FFFDF7", border: `1px solid ${T.border}`, borderRadius: 12, padding: "10px 14px" }}>
-                              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                                <span style={{ fontSize: 14, flexShrink: 0 }}>✅</span>
+                            <div key={idx} style={{ background: "#FFFDF7", border: `1px solid ${T.border}`, borderRadius: 12, overflow: "hidden" }}>
+                              <div
+                                onClick={() => setExpandedCompletedTask(prev => ({ ...prev, [pastExpandKey]: !prev[pastExpandKey] }))}
+                                style={{ padding: "10px 14px", cursor: "pointer", display: "flex", alignItems: "center", gap: 8, transition: "background 0.15s" }}
+                                onMouseEnter={e => e.currentTarget.style.background = "#FFF9EE"}
+                                onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                                <span style={{ fontSize: 14, flexShrink: 0 }}>{qt._allDone ? "✅" : "◻️"}</span>
                                 <span style={{ fontFamily: T.sans, fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.6, padding: "2px 8px", background: qColors.bg, color: qColors.text, border: `1px solid ${qColors.border}`, borderRadius: 4, flexShrink: 0 }}>{qt.tag || "Task"}</span>
-                                <span style={{ fontFamily: T.sans, fontSize: 13, fontWeight: 600, color: T.ink, flex: 1, lineHeight: 1.3 }}>{qt.title}</span>
+                                <span style={{ fontFamily: T.sans, fontSize: 13, fontWeight: 600, color: T.ink, flex: 1, lineHeight: 1.3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{qt.title || qt.steps?.[0]}</span>
                                 {qt.time && <span style={{ fontFamily: T.sans, fontSize: 11, color: T.muted, flexShrink: 0 }}>{qt.time}</span>}
+                                <svg width="10" height="10" viewBox="0 0 10 10" fill="none" style={{ transition: "transform 0.2s", transform: isPastExpanded ? "rotate(180deg)" : "rotate(0deg)", flexShrink: 0 }}>
+                                  <path d="M2 3.5l3 3 3-3" stroke="#C8C8D0" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                                </svg>
                               </div>
+                              {isPastExpanded && (
+                                <div style={{ padding: "0 14px 12px", borderTop: `1px solid ${T.border}30`, animation: "fadeIn 0.2s ease" }}>
+                                  {/* Scheduled commitment */}
+                                  {pastIntention && (
+                                    <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 10px", background: "#EEF6F0", border: "1px solid #A8D4B4", borderRadius: 8, marginTop: 10, marginBottom: 6 }}>
+                                      <svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M8 1v6l4 2" stroke="#3B7A56" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/><circle cx="8" cy="8" r="7" stroke="#3B7A56" strokeWidth="1.5"/></svg>
+                                      <span style={{ fontFamily: T.sans, fontSize: 12, color: "#3B7A56", fontWeight: 500 }}>
+                                        {pastIntention.when}{pastIntention.where ? ` · ${pastIntention.where}` : ""}
+                                      </span>
+                                    </div>
+                                  )}
+                                  {/* Steps — show actual checked state */}
+                                  {(qt.steps || []).length > 0 && (() => {
+                                    const qChecked = checkedSteps[`${dayNum}_${qt._qi}`] || {};
+                                    return (
+                                    <div style={{ marginTop: 8 }}>
+                                      {qt.steps.map((step, si) => {
+                                        const wasChecked = qChecked[si];
+                                        return (
+                                        <div key={si} style={{ display: "flex", gap: 8, alignItems: "flex-start", marginBottom: 4 }}>
+                                          <div style={{ width: 16, height: 16, borderRadius: 4, background: wasChecked ? qColors.text : "#E8E8E8", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, marginTop: 2, opacity: 0.5 }}>
+                                            {wasChecked && <svg width="8" height="7" viewBox="0 0 12 10" fill="none"><path d="M1 5l3.5 3.5L11 1" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/></svg>}
+                                          </div>
+                                          <span style={{ fontFamily: T.sans, fontSize: 13, color: wasChecked ? "#B0B0B8" : T.body, lineHeight: 1.5, textDecoration: wasChecked ? "line-through" : "none" }}>{step}</span>
+                                        </div>
+                                        );
+                                      })}
+                                    </div>
+                                    );
+                                  })()}
+                                  {/* Description */}
+                                  {qt.desc && <p style={{ fontFamily: T.sans, fontSize: 12, color: T.muted, margin: "8px 0 0", lineHeight: 1.6, fontStyle: "italic" }}>{qt.desc}</p>}
+                                  {/* Their notes */}
+                                  {pastNote.trim() && (
+                                    <div style={{ marginTop: 10, padding: "8px 12px", background: "#fff", borderRadius: 8, border: `1px solid ${T.border}` }}>
+                                      <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 600, color: T.muted, margin: "0 0 4px" }}>Your notes</p>
+                                      <p style={{ fontFamily: T.sans, fontSize: 13, color: T.body, margin: 0, lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{pastNote}</p>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
                             </div>
                           );
                         })}
@@ -8746,6 +8841,227 @@ function DashboardScreen({ plan: initialPlan, onBack, startDate }) {
         );
       })()}
 
+      {/* ── DAY COMPLETION CELEBRATION MODAL ── */}
+      {celebrationModal && (() => {
+        const { dayNum: cm_dayNum, earned, streakCount: cm_streak, crossedMilestone, comebackBonus, luckySparks, tasksCompleted } = celebrationModal;
+        const nextDay = cm_dayNum + 1;
+        const hasNext = nextDay <= TOTAL_DAYS;
+        const quote = dailyQuotes[cm_dayNum];
+        const doneCount = Object.values(dayStatus).filter(s => s === 'done').length;
+        const celebHeadlines = ["You did it.", "Done.", "Locked in.", "Another one.", "Showed up."];
+        const archCompLine = ARCHETYPE_COMPLETION[plan.profileName] || "";
+        const celebHead = comebackBonus ? "You're back." : celebHeadlines[cm_dayNum % celebHeadlines.length];
+        const closeCelebration = () => {
+          setCelebrationModal(null);
+          if (crossedMilestone) {
+            setTimeout(() => setCredsMilestoneModal({
+              tier: crossedMilestone.tier,
+              copy: crossedMilestone.copy,
+              total: cashPot,
+            }), 120);
+          }
+        };
+        return (
+          <div style={{
+            position: "fixed", inset: 0, zIndex: 300,
+            background: "#2C2820",
+            display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+            padding: "24px 20px",
+            overflow: "hidden",
+          }}>
+            <style>{`
+              @keyframes celebIn { from { opacity:0; transform: scale(0.88) translateY(20px); } to { opacity:1; transform: scale(1) translateY(0); } }
+              @keyframes celebConfettiFall {
+                0%   { transform: translateY(-20px) rotate(0deg); opacity: 1; }
+                100% { transform: translateY(110vh) rotate(720deg); opacity: 0; }
+              }
+              @keyframes starPop {
+                0%   { transform: scale(0) rotate(-30deg); opacity: 0; }
+                60%  { transform: scale(1.3) rotate(10deg); opacity: 1; }
+                100% { transform: scale(1) rotate(0deg); opacity: 1; }
+              }
+            `}</style>
+
+            {/* Confetti */}
+            {Array.from({ length: 18 }, (_, i) => (
+              <div key={i} style={{
+                position: "absolute",
+                left: `${5 + (i * 5.5) % 90}%`,
+                top: `${-5 - (i * 7) % 20}%`,
+                width: i % 3 === 0 ? 10 : i % 3 === 1 ? 7 : 12,
+                height: i % 3 === 0 ? 10 : i % 3 === 1 ? 7 : 4,
+                borderRadius: i % 3 === 2 ? 2 : "50%",
+                background: ["#f0b429","#E0D4F8","#F0C050","#FFD8C4","#C4E0FF","#FBBF24"][i % 6],
+                animation: `celebConfettiFall ${2.2 + (i * 0.18) % 1.8}s ease-in ${(i * 0.11) % 1.4}s both`,
+                pointerEvents: "none",
+              }} />
+            ))}
+
+            {/* Card */}
+            <div style={{
+              width: "100%", maxWidth: 400, textAlign: "center",
+              animation: "celebIn 0.5s cubic-bezier(0.22,1,0.36,1)",
+            }}>
+              {/* Checkmark circle */}
+              <div style={{ display: "flex", justifyContent: "center", marginBottom: 18 }}>
+                <div style={{
+                  width: 64, height: 64, borderRadius: "50%",
+                  background: "rgba(240,180,41,0.15)",
+                  border: "2px solid rgba(232,168,32,0.25)",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  animation: "starPop 0.5s cubic-bezier(0.22,1,0.36,1) 0.1s both",
+                }}>
+                  <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+                    <path d="M6 14l6 6 10-12" stroke="#E8A820" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                </div>
+              </div>
+
+              {/* Day done headline */}
+              <p style={{ fontFamily: T.sans, fontSize: 14, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "rgba(255,210,60,0.95)", margin: "0 0 8px" }}>
+                Day {cm_dayNum} complete
+              </p>
+              <h2 style={{ fontFamily: T.serif, fontSize: 36, fontWeight: 400, color: "#fff", margin: "0 0 6px", letterSpacing: "-0.5px", lineHeight: 1.1 }}>
+                {celebHead}
+              </h2>
+
+              {/* Archetype completion line */}
+              {archCompLine && !comebackBonus && (
+                <p style={{ fontFamily: T.sans, fontSize: 14, color: "rgba(255,255,255,0.5)", margin: "0 0 6px", fontStyle: "italic" }}>
+                  {archCompLine}
+                </p>
+              )}
+
+              {/* Comeback bonus callout */}
+              {comebackBonus > 0 && (
+                <div style={{ display: "inline-flex", alignItems: "center", gap: 8, background: "rgba(59,122,86,0.2)", border: "1px solid rgba(59,122,86,0.3)", borderRadius: 10, padding: "8px 16px", margin: "8px 0 8px" }}>
+                  <span style={{ fontSize: 16 }}>💪</span>
+                  <span style={{ fontFamily: T.sans, fontSize: 14, fontWeight: 600, color: "#90CCA8" }}>+{comebackBonus} comeback bonus</span>
+                </div>
+              )}
+
+              {/* Lucky Spark bonus callout */}
+              {luckySparks > 0 && (
+                <div style={{ display: "inline-flex", alignItems: "center", gap: 8, background: "rgba(240,200,60,0.15)", border: "1px solid rgba(240,200,60,0.35)", borderRadius: 10, padding: "8px 16px", margin: "8px 0 8px", animation: "celebIn 0.5s cubic-bezier(0.22,1,0.36,1) 0.3s both" }}>
+                  <span style={{ fontSize: 16 }}>✦</span>
+                  <span style={{ fontFamily: T.sans, fontSize: 14, fontWeight: 600, color: "#fad568" }}>+{luckySparks} Lucky Spark{luckySparks > 1 ? "s" : ""}!</span>
+                </div>
+              )}
+
+              {/* Only show streak at meaningful milestones */}
+              {[3, 7, 14, 21, 30].includes(cm_streak) ? (
+                <p style={{ fontFamily: T.sans, fontSize: 15, color: "rgba(255,255,255,0.6)", margin: "0 0 20px" }}>
+                  🔥 {cm_streak}-day streak
+                </p>
+              ) : <div style={{ height: 20 }} />}
+
+              {/* Sparks earned */}
+              <div style={{ display: "inline-flex", alignItems: "center", gap: 10, background: "rgba(240,180,41,0.15)", border: "1px solid rgba(240,180,41,0.35)", borderRadius: 12, padding: "10px 22px", marginBottom: 28 }}>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                  <path d={SPARKLE_PATH} fill="#fad568"/>
+                  <circle cx="19" cy="5" r="1.5" fill="#fff" opacity="0.6"/>
+                </svg>
+                <span style={{ fontFamily: T.sans, fontSize: 16, fontWeight: 800, color: "#fad568" }}>+{earned} Sparks</span>
+              </div>
+
+              {/* Next achievement teaser */}
+              {(() => {
+                const ctx = { dayStatus: { ...dayStatus, [cm_dayNum]: 'done' }, dayTasks, streakCount: cm_streak, brilChangeMade, brilPickDay, comebackCompleted, streakFreezeUsed };
+                const nextAchievement = ACHIEVEMENTS.find(a => !a.earned(ctx) && a.progress);
+                if (!nextAchievement) return null;
+                const prog = nextAchievement.progress(ctx);
+                if (!prog || prog.current <= 0) return null;
+                const pct = Math.round((prog.current / prog.target) * 100);
+                return (
+                  <div style={{ display: "inline-flex", alignItems: "center", gap: 10, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 10, padding: "10px 18px", marginBottom: 16, maxWidth: 320 }}>
+                    <span style={{ fontSize: 18, filter: "grayscale(0.5)", flexShrink: 0 }}>{nextAchievement.icon}</span>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <p style={{ fontFamily: T.sans, fontSize: 12, fontWeight: 600, color: "rgba(255,255,255,0.6)", margin: "0 0 4px" }}>Next: {nextAchievement.name}</p>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        <div style={{ flex: 1, height: 4, background: "rgba(255,255,255,0.1)", borderRadius: 2, overflow: "hidden" }}>
+                          <div style={{ height: "100%", borderRadius: 2, background: pct >= 75 ? "#90CCA8" : "#fad568", width: `${pct}%`, transition: "width 0.4s" }} />
+                        </div>
+                        <span style={{ fontFamily: T.sans, fontSize: 10, color: "rgba(255,255,255,0.45)", fontWeight: 600, whiteSpace: "nowrap" }}>{prog.current}/{prog.target}</span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* Quote */}
+              <div style={{ margin: "0 0 32px", padding: "0 4px" }}>
+                {quote ? (
+                  <p style={{ fontFamily: T.serif, fontSize: 19, color: "rgba(255,255,255,0.78)", margin: "0 0 10px", lineHeight: 1.6, fontStyle: "italic" }}>
+                    {quote.text}
+                  </p>
+                ) : null}
+              </div>
+
+              {/* "Look how far you've come" retrospective — every 7th completed day */}
+              {doneCount > 0 && doneCount % 7 === 0 && (() => {
+                const firstTask = dayTasks[1];
+                const latestTask = dayTasks[cm_dayNum];
+                const earlyNote = Object.entries(dayNotes).find(([d, n]) => parseInt(d) <= 3 && n && n.trim() && !d.includes("_"));
+                const weeksCompleted = Math.floor(doneCount / 7);
+                return (
+                  <div style={{
+                    background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.12)",
+                    borderRadius: 16, padding: "18px 20px", margin: "0 0 28px", textAlign: "left",
+                  }}>
+                    <p style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, letterSpacing: 1.2, textTransform: "uppercase", color: "rgba(255,210,60,0.8)", margin: "0 0 14px" }}>
+                      {weeksCompleted} week{weeksCompleted !== 1 ? "s" : ""} of progress
+                    </p>
+                    {firstTask && latestTask && cm_dayNum > 1 && (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: earlyNote ? 14 : 0 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                          <span style={{ fontFamily: T.sans, fontSize: 11, color: "rgba(255,255,255,0.4)", fontWeight: 600, width: 42, flexShrink: 0 }}>Day 1</span>
+                          <p style={{ fontFamily: T.sans, fontSize: 13, color: "rgba(255,255,255,0.55)", margin: 0, lineHeight: 1.4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{firstTask.title}</p>
+                        </div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                          <span style={{ fontFamily: T.sans, fontSize: 11, color: "rgba(255,210,60,0.8)", fontWeight: 600, width: 42, flexShrink: 0 }}>Today</span>
+                          <p style={{ fontFamily: T.sans, fontSize: 13, color: "rgba(255,255,255,0.85)", margin: 0, lineHeight: 1.4, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{latestTask.title}</p>
+                        </div>
+                      </div>
+                    )}
+                    {earlyNote && (
+                      <div style={{ borderTop: "1px solid rgba(255,255,255,0.08)", paddingTop: 12 }}>
+                        <p style={{ fontFamily: T.sans, fontSize: 11, color: "rgba(255,255,255,0.35)", margin: "0 0 6px" }}>You wrote on Day {earlyNote[0]}:</p>
+                        <p style={{ fontFamily: T.serif, fontSize: 14, color: "rgba(255,255,255,0.65)", margin: 0, lineHeight: 1.55, fontStyle: "italic" }}>
+                          "{earlyNote[1].trim().slice(0, 120)}{earlyNote[1].trim().length > 120 ? "…" : ""}"
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+
+              {/* Continue button */}
+              {hasNext ? (
+                <button onClick={() => {
+                  closeCelebration();
+                  setActiveDay(nextDay);
+                  window.scrollTo({ top: 0, behavior: "smooth" });
+                }}
+                  style={{ width: "100%", background: "#fff", color: "#1E1E2A", border: "none", borderRadius: 14, padding: "18px 0", fontFamily: T.sans, fontSize: 18, fontWeight: 700, cursor: "pointer", letterSpacing: -0.3, marginBottom: 10, transition: "transform 0.15s" }}
+                  onMouseEnter={e => e.currentTarget.style.transform = "scale(1.02)"}
+                  onMouseLeave={e => e.currentTarget.style.transform = "scale(1)"}>
+                  Continue to Day {nextDay} →
+                </button>
+              ) : (
+                <button onClick={closeCelebration}
+                  style={{ width: "100%", background: "#fff", color: "#1E1E2A", border: "none", borderRadius: 14, padding: "18px 0", fontFamily: T.sans, fontSize: 18, fontWeight: 700, cursor: "pointer", letterSpacing: -0.3, marginBottom: 10 }}>
+                  Back to dashboard →
+                </button>
+              )}
+              <button onClick={closeCelebration}
+                style={{ background: "none", border: "none", fontFamily: T.sans, fontSize: 13, color: "rgba(255,255,255,0.4)", cursor: "pointer", padding: "6px 0" }}>
+                Stay on this day
+              </button>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* ── CREDS MILESTONE MODAL ── */}
       {credsMilestoneModal && (() => {
         const { tier, copy, total } = credsMilestoneModal;
@@ -8977,7 +9293,7 @@ Program change made: ${hasChange ? "yes" : "no"}
 Type of change: ${cmds.changeGoal !== undefined ? "goal changed" : cmds.weekGoal ? "weekly focus changed" : cmds.requestedTask ? "custom task requested" : cmds.slowDown ? "pace adjusted" : "insight only"}
 
 Return ONLY valid JSON: {"score": N, "reason": "one short sentence"}`;
-                const res = await fetch("/api/generate", {
+                const res = await fetch("/api/anthropic", {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
                   body: JSON.stringify({ model: MODEL_FAST, max_tokens: 80, messages: [{ role: "user", content: prompt }] }),
@@ -9163,7 +9479,7 @@ Program changes made: ${changes.length ? changes.join("; ") : "none"}
 
 Write the summary in third person ("They were working on...", "They mentioned..."). Keep it under 60 words. Return only the summary text, no preamble.`;
 
-                const res = await fetch("/api/generate", {
+                const res = await fetch("/api/anthropic", {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
                   body: JSON.stringify({ model: MODEL_FAST, max_tokens: 120, messages: [{ role: "user", content: summaryPrompt }] }),
